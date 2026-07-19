@@ -15,6 +15,12 @@ Podman, Colima, Kubernetes.
 | `ghcr.io/jamesbraid/unifi-network` | UniFi Network Application (standalone) |
 | `ghcr.io/jamesbraid/unifi-os-server` | UniFi OS Server (planned) |
 
+## Current versions
+
+| Image | Version | Release notes |
+|---|---|---|
+| `ghcr.io/jamesbraid/unifi-network` | 10.0.162 | [Release notes](https://community.ui.com/releases) |
+
 ## Tags
 
 | Variant | Tags |

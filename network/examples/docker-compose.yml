@@ -1,0 +1,16 @@
+# Test-target usage: one container, embedded MongoDB.
+# `docker compose up --wait` returns when the controller answers.
+# TAG=sim gives simulation mode: admin/admin login, seeded demo devices,
+# no setup wizard, and a healthcheck that probes a real API login.
+services:
+  unifi:
+    image: ghcr.io/jamesbraid/unifi-network:${TAG:-sim}
+    init: true
+    ports:
+      - "8443:8443"   # controller GUI/API (https)
+      - "8080:8080"   # device/controller communication
+    # Data is ephemeral by design. For persistence across restarts:
+    # volumes:
+    #   - unifi:/unifi
+# volumes:
+#   unifi:
