@@ -7,6 +7,9 @@
 set -eu
 
 git config --global --add safe.directory "$(pwd)"
+# Annotated tags need a tagger identity; the CI container has none.
+git config user.name  "unifi-containers updater"
+git config user.email "noreply@loreland.org"
 msg=$(git log -1 --format=%s)
 case "$msg" in
   "network: bump to "*)
