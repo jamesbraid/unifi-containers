@@ -7,6 +7,6 @@ steps:
     image: alpine/git
     environment:
       FORGEJO_TOKEN:
-        from_secret: forgejo_token
+        from_secret: forgejo_ci_token
     commands:
       - ./scripts/mint-tag.sh

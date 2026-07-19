@@ -7,7 +7,7 @@ steps:
     image: ghcr.io/astral-sh/uv:python3.13-alpine
     environment:
       FORGEJO_TOKEN:
-        from_secret: forgejo_token
+        from_secret: forgejo_ci_token
     commands:
       - apk add --no-cache git curl jq
       - ./scripts/run-update.sh stable
@@ -16,7 +16,7 @@ steps:
     image: ghcr.io/astral-sh/uv:python3.13-alpine
     environment:
       FORGEJO_TOKEN:
-        from_secret: forgejo_token
+        from_secret: forgejo_ci_token
     commands:
       - apk add --no-cache git curl jq
       - ./scripts/run-update.sh rc
