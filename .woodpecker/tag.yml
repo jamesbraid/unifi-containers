@@ -5,8 +5,10 @@ when:
 steps:
   mint-tag:
     image: alpine/git
+    # mint-tag needs curl for the release-time mirror sync
     environment:
       FORGEJO_TOKEN:
         from_secret: forgejo_ci_token
     commands:
+      - apk add --no-cache curl
       - ./scripts/mint-tag.sh

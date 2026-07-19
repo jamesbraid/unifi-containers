@@ -36,3 +36,10 @@ git tag -a "${tag}" -m "${tag#*v} (${tag})"
 push_url=$(printf '%s' "${CI_REPO_CLONE_URL}" | sed "s#https://#https://oauth2:${FORGEJO_TOKEN}@#")
 git push "$push_url" "refs/tags/${tag}"
 echo "minted ${tag}"
+
+# Releases are the moment the outside world should see: the GitHub mirror
+# is manual-sync (local iteration stays local), so publish it now. The
+# mirrored tag push then fires the GitHub release workflow.
+curl -fsS -X POST -H "Authorization: token ${FORGEJO_TOKEN}" \
+  "${CI_FORGE_URL}/api/v1/repos/${CI_REPO}/push_mirrors-sync"
+echo "mirror sync triggered"
