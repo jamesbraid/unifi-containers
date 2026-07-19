@@ -30,6 +30,8 @@ jobs:
       digest_arm64: ${{ steps.digests.outputs.digest_arm64 }}
       sim_digest_amd64: ${{ steps.digests.outputs.sim_digest_amd64 }}
       sim_digest_arm64: ${{ steps.digests.outputs.sim_digest_arm64 }}
+      seeded_digest_amd64: ${{ steps.digests.outputs.seeded_digest_amd64 }}
+      seeded_digest_arm64: ${{ steps.digests.outputs.seeded_digest_arm64 }}
     steps:
       - uses: actions/checkout@v6
 
@@ -50,19 +52,24 @@ jobs:
       - name: Extract UOS base image (pinned + sha256-verified)
         run: ./unifi-os/extract-uos.sh ${{ matrix.arch }}
 
-      - name: Build base and sim images
+      - name: Build base, sim, and seeded images
         run: |
           docker build --build-arg UOS_VERSION="${{ steps.ver.outputs.version }}" \
             --build-arg REVISION="${GITHUB_SHA}" \
             -t "$IMAGE:${{ steps.ver.outputs.version }}-${{ matrix.arch }}" unifi-os/
           docker build --build-arg BASE_IMAGE="$IMAGE:${{ steps.ver.outputs.version }}-${{ matrix.arch }}" \
             -t "$IMAGE:${{ steps.ver.outputs.version }}-sim-${{ matrix.arch }}" unifi-os/sim/
+          docker build --build-arg BASE_IMAGE="$IMAGE:${{ steps.ver.outputs.version }}-${{ matrix.arch }}" \
+            -t "$IMAGE:${{ steps.ver.outputs.version }}-seeded-${{ matrix.arch }}" unifi-os/seeded/
 
-      - name: Health gate (native, sim = strongest signal) — a broken image never publishes
+      - name: Health gate both variants (native) — a broken image never publishes
         run: |
-          ./.github/scripts/run-uos.sh gate "$IMAGE:${{ steps.ver.outputs.version }}-sim-${{ matrix.arch }}"
-          ./.github/scripts/wait-healthy.sh gate 900
-          docker rm -f gate
+          ./.github/scripts/run-uos.sh gate-sim "$IMAGE:${{ steps.ver.outputs.version }}-sim-${{ matrix.arch }}"
+          ./.github/scripts/wait-healthy.sh gate-sim 900
+          docker rm -f gate-sim
+          ./.github/scripts/run-uos.sh gate-seeded "$IMAGE:${{ steps.ver.outputs.version }}-seeded-${{ matrix.arch }}"
+          ./.github/scripts/wait-healthy.sh gate-seeded 900
+          docker rm -f gate-seeded
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -78,8 +85,10 @@ jobs:
           a=${{ matrix.arch }}
           base_digest=$(docker push "$IMAGE:$v-$a" | sed -n 's/.*digest: \(sha256:[0-9a-f]*\).*/\1/p')
           sim_digest=$(docker push "$IMAGE:$v-sim-$a" | sed -n 's/.*digest: \(sha256:[0-9a-f]*\).*/\1/p')
+          seeded_digest=$(docker push "$IMAGE:$v-seeded-$a" | sed -n 's/.*digest: \(sha256:[0-9a-f]*\).*/\1/p')
           echo "digest_$a=$base_digest" >> "$GITHUB_OUTPUT"
           echo "sim_digest_$a=$sim_digest" >> "$GITHUB_OUTPUT"
+          echo "seeded_digest_$a=$seeded_digest" >> "$GITHUB_OUTPUT"
 
   manifest:
     needs: build
@@ -106,8 +115,12 @@ jobs:
           docker buildx imagetools create -t "$IMAGE:$v-sim" \
             "$IMAGE@${{ needs.build.outputs.sim_digest_amd64 }}" \
             "$IMAGE@${{ needs.build.outputs.sim_digest_arm64 }}"
+          docker buildx imagetools create -t "$IMAGE:$v-seeded" \
+            "$IMAGE@${{ needs.build.outputs.seeded_digest_amd64 }}" \
+            "$IMAGE@${{ needs.build.outputs.seeded_digest_arm64 }}"
           echo "base=$(docker buildx imagetools inspect "$IMAGE:$v" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')" >> "$GITHUB_OUTPUT"
           echo "sim=$(docker buildx imagetools inspect "$IMAGE:$v-sim" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')" >> "$GITHUB_OUTPUT"
+          echo "seeded=$(docker buildx imagetools inspect "$IMAGE:$v-seeded" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')" >> "$GITHUB_OUTPUT"
 
       - name: Move sliding tags where this is the highest version
         run: |
@@ -115,4 +128,5 @@ jobs:
             "${{ needs.build.outputs.version }}" \
             "${{ steps.stitch.outputs.base }}" \
             "${{ steps.stitch.outputs.sim }}" \
-            unifi-os-v
+            unifi-os-v \
+            "${{ steps.stitch.outputs.seeded }}"
