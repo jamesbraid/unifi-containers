@@ -1,0 +1,22 @@
+#!/bin/sh
+# Runs from the entrypoint's init-hook dir before the systemd handoff, so
+# the keys are in place before the bundled Network Application's first
+# start. Simulation mode seeds an admin/admin account plus demo sites,
+# devices, and networks — no setup wizard needed. Same key set as the
+# standalone unifi-network sim variant.
+
+SYSPROPS=/var/lib/unifi/system.properties
+
+write_config() {
+    grep -q "^${1}=" "$SYSPROPS" 2>/dev/null || echo "${1}=${2}" >> "$SYSPROPS"
+}
+
+mkdir -p /var/lib/unifi
+touch "$SYSPROPS"
+
+write_config is_simulation true
+write_config demo.num_uap 3
+write_config demo.num_ugw 1
+write_config demo.num_usw 5
+
+chown unifi:unifi "$SYSPROPS" 2>/dev/null || true
