@@ -16,16 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: docker/setup-buildx-action@v3
-
+      # Plain `docker build` throughout: the sim build must resolve the
+      # just-built base image from the local daemon, which the buildx
+      # container driver cannot do.
       - name: Build base image (amd64)
-        uses: docker/build-push-action@v6
-        with:
-          context: network
-          load: true
-          tags: unifi-network:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+        run: docker build -t unifi-network:ci network/
 
       - name: Boot and health-gate base image
         run: |
@@ -34,13 +29,7 @@ jobs:
           docker rm -f unifi-ci
 
       - name: Build sim image
-        uses: docker/build-push-action@v6
-        with:
-          context: network/sim
-          load: true
-          build-args: |
-            BASE_IMAGE=unifi-network:ci
-          tags: unifi-network:ci-sim
+        run: docker build --build-arg BASE_IMAGE=unifi-network:ci -t unifi-network:ci-sim network/sim/
 
       - name: Boot and health-gate sim image (API login probe)
         run: |
