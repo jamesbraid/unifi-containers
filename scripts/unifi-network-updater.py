@@ -16,13 +16,21 @@ import sys
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 FEED_URL = (
     "https://community.ui.com/rss/releases/UniFi-Network-Application/"
     "e6712595-81bb-4829-8e42-9e2630fabcfe"
 )
+# The Ubiquiti apt repo's stable dist is the GA authority. The community
+# feed stopped marking channels in titles (verified 2026-07-19: 10.5.62 RC
+# appears with a bare title while apt stable ships 10.4.57), so feed
+# titles alone cannot distinguish stable from RC.
+APT_PACKAGES_URL = (
+    "https://dl.ui.com/unifi/debian/dists/stable/ubiquiti/binary-amd64/Packages"
+)
+FALLBACK_LINK = "https://community.ui.com/releases"
 USER_AGENT = "Mozilla/5.0 (unifi-containers updater)"
 DOCKERFILE = "network/Dockerfile"
 README = "README.md"
@@ -84,12 +92,32 @@ def version_key(version: str) -> tuple:
     return tuple(int(p) for p in version.split("."))
 
 
-def select_release(releases, channel: str):
+def parse_apt_stable(packages_text: str) -> str:
+    """Version of the `unifi` package in the apt stable dist (GA truth)."""
+    package = None
+    for line in packages_text.splitlines():
+        if line.startswith("Package: "):
+            package = line[len("Package: "):].strip()
+        elif line.startswith("Version: ") and package == "unifi":
+            return line[len("Version: "):].strip().split("-")[0]
+    raise RuntimeError("unifi package not found in apt Packages index")
+
+
+def select_release(releases, channel: str, apt_stable: str):
+    """stable = whatever the apt repo ships (feed supplies the notes link
+    if it has that version); rc = newest non-beta feed version above the
+    apt-stable version."""
     if channel == "stable":
-        pool = [r for r in releases if not r.is_rc and not r.is_beta]
-    else:
-        pool = [r for r in releases if r.is_rc and not r.is_beta]
-    return max(pool, key=lambda r: version_key(r.version)) if pool else None
+        rel = next((r for r in releases if r.version == apt_stable), None)
+        if rel is None:
+            return Release(version=apt_stable, title="", link=FALLBACK_LINK,
+                           is_rc=False, is_beta=False)
+        return replace(rel, is_rc=False)
+    pool = [r for r in releases if not r.is_beta
+            and version_key(r.version) > version_key(apt_stable)]
+    if not pool:
+        return None
+    return replace(max(pool, key=lambda r: version_key(r.version)), is_rc=True)
 
 
 def build_pkgurl(version: str) -> str:
@@ -195,10 +223,11 @@ def main() -> int:
         except Exception as exc:  # feed is best-effort in pin mode
             print(f"warning: feed lookup failed ({exc}); using generic link", file=sys.stderr)
     else:
-        rel = select_release(parse_feed(fetch(FEED_URL)), args.channel)
+        apt_stable = parse_apt_stable(fetch(APT_PACKAGES_URL).decode())
+        rel = select_release(parse_feed(fetch(FEED_URL)), args.channel, apt_stable)
         if rel is None:
-            print(f"no {args.channel} release found in feed", file=sys.stderr)
-            return 1
+            print(f"up-to-date: no {args.channel} release beyond apt stable {apt_stable}")
+            return 0
         if version_key(rel.version) <= version_key(current):
             print(f"up-to-date: pinned {current}, newest {args.channel} is {rel.version}")
             return 0

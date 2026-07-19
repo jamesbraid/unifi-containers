@@ -12,11 +12,14 @@ updater = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(updater)
 
 
+# Real-world shape (verified 2026-07-19): feed titles carry NO channel
+# markers — RCs appear with bare version titles. Only the apt repo tells
+# stable from RC.
 FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
-  <item><title>UniFi Network Application 10.5.62 RC</title>
+  <item><title>UniFi Network Application 10.5.62</title>
     <link>https://community.ui.com/releases/rc-10-5-62</link></item>
-  <item><title>UniFi Network Application 10.5.54 RC</title>
+  <item><title>UniFi Network Application 10.5.54</title>
     <link>https://community.ui.com/releases/rc-10-5-54</link></item>
   <item><title>UniFi Network Application 10.4.57</title>
     <link>https://community.ui.com/releases/stable-10-4-57</link></item>
@@ -27,6 +30,13 @@ FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
   <item><title>Some post with no version number</title>
     <link>https://community.ui.com/releases/misc</link></item>
 </channel></rss>
+"""
+
+APT_PACKAGES = """Package: unifi
+Architecture: all
+Version: 10.4.57-34628-1
+Depends: java17-runtime-headless
+Filename: pool/ubiquiti/u/unifi/unifi_10.4.57-34628-1_all.deb
 """
 
 DOCKERFILE = """FROM ubuntu:20.04
@@ -41,27 +51,42 @@ README = """# unifi-containers
 """
 
 
-def test_parse_feed_versions_and_flags():
+def test_parse_feed_versions():
     rels = updater.parse_feed(FEED)
     assert [r.version for r in rels] == ["10.5.62", "10.5.54", "10.4.57", "10.6.1", "10.3.58"]
-    assert [r.is_rc for r in rels] == [True, True, False, False, False]
     assert [r.is_beta for r in rels] == [False, False, False, True, False]
 
 
-def test_select_release_stable_skips_rc_and_beta():
-    rel = updater.select_release(updater.parse_feed(FEED), "stable")
+def test_parse_apt_stable():
+    assert updater.parse_apt_stable(APT_PACKAGES) == "10.4.57"
+
+
+def test_parse_apt_stable_raises_without_unifi():
+    with pytest.raises(RuntimeError):
+        updater.parse_apt_stable("Package: other\nVersion: 1.0-1\n")
+
+
+def test_select_stable_follows_apt_not_newest_feed_entry():
+    rel = updater.select_release(updater.parse_feed(FEED), "stable", "10.4.57")
     assert rel.version == "10.4.57" and not rel.is_rc
+    assert rel.link == "https://community.ui.com/releases/stable-10-4-57"
 
 
-def test_select_release_rc_channel():
-    rel = updater.select_release(updater.parse_feed(FEED), "rc")
+def test_select_stable_synthesizes_when_apt_version_not_in_feed():
+    rel = updater.select_release(updater.parse_feed(FEED), "stable", "10.4.99")
+    assert rel.version == "10.4.99" and not rel.is_rc
+    assert rel.link == updater.FALLBACK_LINK
+
+
+def test_select_rc_newest_above_apt_stable_skipping_beta():
+    rel = updater.select_release(updater.parse_feed(FEED), "rc", "10.4.57")
     assert rel.version == "10.5.62" and rel.is_rc
     assert rel.tag_version == "10.5.62-rc"
 
 
-def test_select_release_none_when_channel_empty():
-    stable_only = updater.parse_feed(FEED)[2:3]
-    assert updater.select_release(stable_only, "rc") is None
+def test_select_rc_none_when_feed_has_nothing_newer():
+    rel = updater.select_release(updater.parse_feed(FEED), "rc", "10.5.62")
+    assert rel is None
 
 
 def test_version_key_orders_numerically():
