@@ -11,17 +11,11 @@ steps:
       - uv run --with pytest pytest scripts/tests/ -q
 
   verify-pins:
+    # Format + reachability only. Monotonicity is enforced where bumps are
+    # SELECTED (the updaters check against external channel authorities);
+    # fetching the target branch here would need repo auth on PR events,
+    # which the clone credentials don't survive to provide.
     image: ghcr.io/astral-sh/uv:python3.13-alpine
     commands:
-      - apk add --no-cache git
-      - |
-        if [ "$CI_PIPELINE_EVENT" = "pull_request" ]; then
-          git fetch --depth=1 origin "${CI_COMMIT_TARGET_BRANCH:-main}"
-          base=$(git show FETCH_HEAD:network/Dockerfile | sed -n 's#^ARG PKGURL=.*/unifi/\([0-9.]*\)/.*#\1#p')
-          python3 scripts/unifi-network-updater.py --verify ${base:+--against "$base"}
-          uos_base=$(git show FETCH_HEAD:unifi-os/pins.env 2>/dev/null | sed -n 's/^UOS_VERSION=//p' || true)
-          python3 scripts/unifi-os-updater.py --verify ${uos_base:+--against "$uos_base"}
-        else
-          python3 scripts/unifi-network-updater.py --verify
-          python3 scripts/unifi-os-updater.py --verify
-        fi
+      - python3 scripts/unifi-network-updater.py --verify
+      - python3 scripts/unifi-os-updater.py --verify
