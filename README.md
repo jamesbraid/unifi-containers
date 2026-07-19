@@ -32,6 +32,27 @@ Podman, Colima, Kubernetes.
 Sliding tags (`latest`, `sim`, `X`, `X.Y`, …) always point at the highest
 published stable version. RC tags never touch them.
 
+## Simulation mode
+
+The `-sim` tags boot straight into a demo controller: `admin`/`admin`
+account, seeded demo sites and devices (3 APs, 1 gateway, 5 switches), no
+setup wizard. The image's healthcheck only reports healthy once the API
+answers a real JSON login, so "wait for healthy" is a reliable readiness
+signal:
+
+```bash
+docker run -d --name unifi -p 8443:8443 ghcr.io/jamesbraid/unifi-network:sim
+# wait for healthy, then:
+curl -ks -X POST -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin"}' https://localhost:8443/api/login
+```
+
+or `TAG=sim docker compose -f network/examples/docker-compose.yml up --wait`.
+
+Simulation fidelity (which writes stick, how stats evolve) is a per-version
+empirical question — treat it as a controller-API test double, not a
+device-network emulator.
+
 ## Attribution and licensing
 
 - The `network/` build is vendored from

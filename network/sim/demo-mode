@@ -1,0 +1,17 @@
+#!/bin/sh
+# Runs inside the controller container at startup (via the image's
+# /unifi/init.d/ hook). Simulation mode seeds an admin/admin account plus
+# demo sites, devices, and networks — no setup wizard needed. Mirrors the
+# script used by terraform-provider-unifi, ubiquiti-community/unifi-api,
+# and go-unifi's internal/testenv harness.
+
+write_config() {
+  echo "${1}=${2}" >> /usr/lib/unifi/data/system.properties
+}
+
+write_config is_simulation true
+
+# Seed enough demo devices for concurrent tests.
+write_config demo.num_uap 3
+write_config demo.num_ugw 1
+write_config demo.num_usw 5
