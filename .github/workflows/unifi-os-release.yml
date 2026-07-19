@@ -1,0 +1,128 @@
+name: unifi-os release
+
+on:
+  push:
+    tags: ["unifi-os-v[0-9]*"]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/jamesbraid/unifi-os-server
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      digest_amd64: ${{ steps.digests.outputs.digest_amd64 }}
+      digest_arm64: ${{ steps.digests.outputs.digest_arm64 }}
+      sim_digest_amd64: ${{ steps.digests.outputs.sim_digest_amd64 }}
+      sim_digest_arm64: ${{ steps.digests.outputs.sim_digest_arm64 }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Parse tag and check against pins
+        id: ver
+        run: |
+          version=${GITHUB_REF_NAME#unifi-os-v}
+          . ./unifi-os/pins.env
+          if [ "$UOS_VERSION" != "$version" ]; then
+            echo "git tag $GITHUB_REF_NAME != pinned $UOS_VERSION"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Extract UOS base image (pinned + sha256-verified)
+        run: ./unifi-os/extract-uos.sh ${{ matrix.arch }}
+
+      - name: Build base and sim images
+        run: |
+          docker build --build-arg UOS_VERSION="${{ steps.ver.outputs.version }}" \
+            --build-arg REVISION="${GITHUB_SHA}" \
+            -t "$IMAGE:${{ steps.ver.outputs.version }}-${{ matrix.arch }}" unifi-os/
+          docker build --build-arg BASE_IMAGE="$IMAGE:${{ steps.ver.outputs.version }}-${{ matrix.arch }}" \
+            -t "$IMAGE:${{ steps.ver.outputs.version }}-sim-${{ matrix.arch }}" unifi-os/sim/
+
+      - name: Health gate (native, sim = strongest signal) — a broken image never publishes
+        run: |
+          ./.github/scripts/run-uos.sh gate "$IMAGE:${{ steps.ver.outputs.version }}-sim-${{ matrix.arch }}"
+          ./.github/scripts/wait-healthy.sh gate 900
+          docker rm -f gate
+
+      - name: Mint GitHub App token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: x-access-token
+          password: ${{ steps.app.outputs.token }}
+
+      - name: Push per-arch images and capture digests
+        id: digests
+        run: |
+          v=${{ steps.ver.outputs.version }}
+          a=${{ matrix.arch }}
+          base_digest=$(docker push "$IMAGE:$v-$a" | sed -n 's/.*digest: \(sha256:[0-9a-f]*\).*/\1/p')
+          sim_digest=$(docker push "$IMAGE:$v-sim-$a" | sed -n 's/.*digest: \(sha256:[0-9a-f]*\).*/\1/p')
+          echo "digest_$a=$base_digest" >> "$GITHUB_OUTPUT"
+          echo "sim_digest_$a=$sim_digest" >> "$GITHUB_OUTPUT"
+
+  manifest:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # sliding-tags.sh needs every tag
+
+      - name: Mint GitHub App token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: x-access-token
+          password: ${{ steps.app.outputs.token }}
+
+      - name: Stitch multi-arch tags
+        id: stitch
+        run: |
+          v=${{ needs.build.outputs.version }}
+          docker buildx imagetools create -t "$IMAGE:$v" \
+            "$IMAGE@${{ needs.build.outputs.digest_amd64 }}" \
+            "$IMAGE@${{ needs.build.outputs.digest_arm64 }}"
+          docker buildx imagetools create -t "$IMAGE:$v-sim" \
+            "$IMAGE@${{ needs.build.outputs.sim_digest_amd64 }}" \
+            "$IMAGE@${{ needs.build.outputs.sim_digest_arm64 }}"
+          echo "base=$(docker buildx imagetools inspect "$IMAGE:$v" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')" >> "$GITHUB_OUTPUT"
+          echo "sim=$(docker buildx imagetools inspect "$IMAGE:$v-sim" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Move sliding tags where this is the highest version
+        run: |
+          ./.github/scripts/sliding-tags.sh "$IMAGE" \
+            "${{ needs.build.outputs.version }}" \
+            "${{ steps.stitch.outputs.base }}" \
+            "${{ steps.stitch.outputs.sim }}" \
+            unifi-os-v

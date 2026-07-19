@@ -20,3 +20,12 @@ steps:
     commands:
       - apk add --no-cache git curl jq
       - ./scripts/run-update.sh rc
+
+  update-uos:
+    image: ghcr.io/astral-sh/uv:python3.13-alpine
+    environment:
+      FORGEJO_TOKEN:
+        from_secret: forgejo_ci_token
+    commands:
+      - apk add --no-cache git curl jq
+      - ./scripts/run-update.sh uos

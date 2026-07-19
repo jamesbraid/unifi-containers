@@ -1,0 +1,37 @@
+name: unifi-os build
+
+on:
+  pull_request:
+    paths: ["unifi-os/**", ".github/workflows/unifi-os-build.yml", ".github/scripts/**"]
+  push:
+    branches: [main]
+    paths: ["unifi-os/**", ".github/workflows/unifi-os-build.yml", ".github/scripts/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+
+      - name: Extract UOS base image (amd64, pinned + sha256-verified)
+        run: ./unifi-os/extract-uos.sh amd64
+
+      - name: Build base image
+        run: |
+          . ./unifi-os/pins.env
+          docker build --build-arg UOS_VERSION="$UOS_VERSION" -t unifi-os-server:ci unifi-os/
+
+      - name: Build sim image
+        run: docker build --build-arg BASE_IMAGE=unifi-os-server:ci -t unifi-os-server:ci-sim unifi-os/sim/
+
+      - name: Boot and health-gate sim image (systemd contract + API login probe)
+        run: |
+          ./.github/scripts/run-uos.sh uos-ci unifi-os-server:ci-sim
+          ./.github/scripts/wait-healthy.sh uos-ci 900
+          docker rm -f uos-ci

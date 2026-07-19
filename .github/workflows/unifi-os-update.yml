@@ -1,0 +1,51 @@
+# DORMANT standby updater — the live update machinery runs on the canonical
+# repo's CI (see .woodpecker/update.yml). This shadow driver exists so the
+# whole update pipeline can move to GitHub by uncommenting the cron trigger
+# below. Kept exercisable via workflow_dispatch.
+name: unifi-os update (dormant)
+
+on:
+  workflow_dispatch: {}
+  # schedule:
+  #   - cron: "0 4 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint GitHub App token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - uses: actions/checkout@v6
+
+      - name: Run updater
+        id: upd
+        run: |
+          out=$(python3 scripts/unifi-os-updater.py --write)
+          echo "$out"
+          case "$out" in
+            up-to-date*) echo "changed=false" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+              echo "version=$(printf '%s\n' "$out" | tail -1)" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      - name: Open bump PR
+        if: steps.upd.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ steps.app.outputs.token }}
+          branch: bump/unifi-os-${{ steps.upd.outputs.version }}
+          title: "unifi-os: bump to ${{ steps.upd.outputs.version }}"
+          commit-message: "unifi-os: bump to ${{ steps.upd.outputs.version }}"
+          committer: "unifi-containers updater <noreply@loreland.org>"
+          author: "unifi-containers updater <noreply@loreland.org>"
+          body: Automated UniFi OS Server update.
