@@ -4,12 +4,8 @@ on:
   push:
     tags: ["unifi-os-v[0-9]*"]
 
-# BOOTSTRAP NOTE: packages:write + the GITHUB_TOKEN fallback below exist
-# only until the GitHub App (APP_ID/APP_PRIVATE_KEY secrets) is installed;
-# then this returns to `contents: read` with App-token-only writes.
 permissions:
   contents: read
-  packages: write
 
 env:
   IMAGE: ghcr.io/jamesbraid/unifi-os-server
@@ -24,8 +20,6 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
-    env:
-      HAS_APP: ${{ secrets.APP_ID != '' }}
     outputs:
       version: ${{ steps.ver.outputs.version }}
       digest_amd64: ${{ steps.digests.outputs.digest_amd64 }}
@@ -68,7 +62,6 @@ jobs:
 
       - name: Mint GitHub App token
         id: app
-        if: env.HAS_APP == 'true'
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -78,8 +71,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ steps.app.outputs.token || github.token }}
+          username: x-access-token
+          password: ${{ steps.app.outputs.token }}
 
       - name: Push per-arch images and capture digests
         id: digests
@@ -94,8 +87,6 @@ jobs:
   manifest:
     needs: build
     runs-on: ubuntu-latest
-    env:
-      HAS_APP: ${{ secrets.APP_ID != '' }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -103,7 +94,6 @@ jobs:
 
       - name: Mint GitHub App token
         id: app
-        if: env.HAS_APP == 'true'
         uses: actions/create-github-app-token@v2
         with:
           app-id: ${{ secrets.APP_ID }}
@@ -113,8 +103,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ steps.app.outputs.token || github.token }}
+          username: x-access-token
+          password: ${{ steps.app.outputs.token }}
 
       - name: Stitch multi-arch tags
         id: stitch
