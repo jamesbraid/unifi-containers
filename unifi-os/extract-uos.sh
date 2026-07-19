@@ -34,6 +34,7 @@ echo "${sha}  $work/installer" | sha256sum -c -
 echo "==> extracting embedded image.tar"
 unzip -o -q "$work/installer" image.tar -d "$work" || true  # exit 1 = benign prepended-ELF warning
 [ -s "$work/image.tar" ] || { echo "image.tar not found in installer — format drift?" >&2; exit 1; }
+chmod 644 "$work/image.tar"  # the zip stores it mode 000; docker load needs to read it
 
 echo "==> loading into docker"
 loaded=$(docker load -i "$work/image.tar" | sed -n 's/^Loaded image: //p')
