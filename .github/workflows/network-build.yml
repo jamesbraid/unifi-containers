@@ -1,0 +1,49 @@
+name: network build
+
+on:
+  pull_request:
+    paths: ["network/**", ".github/workflows/network-build.yml", ".github/scripts/**"]
+  push:
+    branches: [main, rc]
+    paths: ["network/**", ".github/workflows/network-build.yml", ".github/scripts/**"]
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build base image (amd64)
+        uses: docker/build-push-action@v6
+        with:
+          context: network
+          load: true
+          tags: unifi-network:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Boot and health-gate base image
+        run: |
+          docker run -d --name unifi-ci unifi-network:ci
+          ./.github/scripts/wait-healthy.sh unifi-ci 600
+          docker rm -f unifi-ci
+
+      - name: Build sim image
+        uses: docker/build-push-action@v6
+        with:
+          context: network/sim
+          load: true
+          build-args: |
+            BASE_IMAGE=unifi-network:ci
+          tags: unifi-network:ci-sim
+
+      - name: Boot and health-gate sim image (API login probe)
+        run: |
+          docker run -d --name unifi-ci-sim unifi-network:ci-sim
+          ./.github/scripts/wait-healthy.sh unifi-ci-sim 600
+          docker rm -f unifi-ci-sim

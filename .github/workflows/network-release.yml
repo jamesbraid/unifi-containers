@@ -1,0 +1,121 @@
+name: network release
+
+on:
+  push:
+    tags: ["v[0-9]*"]
+
+permissions:
+  contents: read
+
+env:
+  IMAGE: ghcr.io/jamesbraid/unifi-network
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # sliding-tags.sh needs every tag
+
+      - name: Parse tag
+        id: ver
+        run: |
+          version=${GITHUB_REF_NAME#v}          # 10.4.57 or 10.5.62-rc
+          case "$version" in
+            *-rc) rc=true;  semver=${version%-rc} ;;
+            *)    rc=false; semver=$version ;;
+          esac
+          {
+            echo "version=$version"
+            echo "rc=$rc"
+            echo "semver=$semver"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Tag must match the pinned version
+        run: |
+          pinned=$(sed -n 's#^ARG PKGURL=.*/unifi/\([0-9.]*\)/.*#\1#p' network/Dockerfile)
+          if [ "$pinned" != "${{ steps.ver.outputs.semver }}" ]; then
+            echo "git tag ${{ steps.ver.outputs.version }} != pinned $pinned"
+            exit 1
+          fi
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build amd64 image for the health gate
+        uses: docker/build-push-action@v6
+        with:
+          context: network
+          platforms: linux/amd64
+          load: true
+          tags: unifi-network:gate
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+            REVISION=${{ github.sha }}
+
+      - name: Health gate — a broken image never publishes
+        run: |
+          docker run -d --name gate unifi-network:gate
+          ./.github/scripts/wait-healthy.sh gate 600
+          docker rm -f gate
+
+      - name: Mint GitHub App token
+        id: app
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: x-access-token
+          password: ${{ steps.app.outputs.token }}
+
+      - name: Push base image (multi-arch)
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: network
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.ver.outputs.version }}
+          build-args: |
+            VERSION=${{ steps.ver.outputs.version }}
+            REVISION=${{ github.sha }}
+
+      - name: Point rc sliding tag (RC lane stops here)
+        if: steps.ver.outputs.rc == 'true'
+        run: docker buildx imagetools create --tag "$IMAGE:rc" "$IMAGE@${{ steps.push.outputs.digest }}"
+
+      - name: Build sim (amd64) from the pushed base digest and health-gate it
+        if: steps.ver.outputs.rc == 'false'
+        run: |
+          docker buildx build --load --platform linux/amd64 \
+            --build-arg "BASE_IMAGE=$IMAGE@${{ steps.push.outputs.digest }}" \
+            -t unifi-network:simgate network/sim
+          docker run -d --name simgate unifi-network:simgate
+          ./.github/scripts/wait-healthy.sh simgate 600
+          docker rm -f simgate
+
+      - name: Push sim image (multi-arch, from the pushed base digest)
+        if: steps.ver.outputs.rc == 'false'
+        id: pushsim
+        uses: docker/build-push-action@v6
+        with:
+          context: network/sim
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.ver.outputs.version }}-sim
+          build-args: |
+            BASE_IMAGE=${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+
+      - name: Move sliding tags where this is the highest stable
+        if: steps.ver.outputs.rc == 'false'
+        run: |
+          ./.github/scripts/sliding-tags.sh "$IMAGE" \
+            "${{ steps.ver.outputs.semver }}" \
+            "${{ steps.push.outputs.digest }}" \
+            "${{ steps.pushsim.outputs.digest }}"

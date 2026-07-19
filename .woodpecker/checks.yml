@@ -1,0 +1,24 @@
+when:
+  - event: pull_request
+  - event: push
+    branch: [main, rc]
+  - event: manual
+
+steps:
+  updater-tests:
+    image: ghcr.io/astral-sh/uv:python3.13-alpine
+    commands:
+      - uv run --with pytest pytest scripts/tests/ -q
+
+  verify-pins:
+    image: ghcr.io/astral-sh/uv:python3.13-alpine
+    commands:
+      - apk add --no-cache git
+      - |
+        if [ "$CI_PIPELINE_EVENT" = "pull_request" ]; then
+          git fetch --depth=1 origin "${CI_COMMIT_TARGET_BRANCH:-main}"
+          base=$(git show FETCH_HEAD:network/Dockerfile | sed -n 's#^ARG PKGURL=.*/unifi/\([0-9.]*\)/.*#\1#p')
+          python3 scripts/unifi-network-updater.py --verify ${base:+--against "$base"}
+        else
+          python3 scripts/unifi-network-updater.py --verify
+        fi

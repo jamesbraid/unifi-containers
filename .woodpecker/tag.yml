@@ -1,0 +1,12 @@
+when:
+  - event: push
+    branch: [main, rc]
+
+steps:
+  mint-tag:
+    image: alpine/git
+    environment:
+      FORGEJO_TOKEN:
+        from_secret: forgejo_token
+    commands:
+      - ./scripts/mint-tag.sh

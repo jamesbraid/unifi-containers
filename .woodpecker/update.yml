@@ -1,0 +1,22 @@
+when:
+  - event: cron
+  - event: manual
+
+steps:
+  update-stable:
+    image: ghcr.io/astral-sh/uv:python3.13-alpine
+    environment:
+      FORGEJO_TOKEN:
+        from_secret: forgejo_token
+    commands:
+      - apk add --no-cache git curl jq
+      - ./scripts/run-update.sh stable
+
+  update-rc:
+    image: ghcr.io/astral-sh/uv:python3.13-alpine
+    environment:
+      FORGEJO_TOKEN:
+        from_secret: forgejo_token
+    commands:
+      - apk add --no-cache git curl jq
+      - ./scripts/run-update.sh rc
