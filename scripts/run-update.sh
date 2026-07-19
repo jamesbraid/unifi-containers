@@ -54,6 +54,13 @@ fi
 
 branch="bump/${prefix}-${version}"
 git checkout -b "$branch"
+
+# Network bumps also refresh the sim-key drift tripwire from the new deb.
+if [ "$prefix" = "network" ]; then
+  ./scripts/enumerate-sim-keys.sh "$semver" && git add docs/sim-keys/ || \
+    echo "warning: sim-key enumeration failed; bump proceeds without it" >&2
+fi
+
 # shellcheck disable=SC2086
 git add $files
 git commit -m "${prefix}: bump to ${version}"

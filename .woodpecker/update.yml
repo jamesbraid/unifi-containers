@@ -9,7 +9,7 @@ steps:
       FORGEJO_TOKEN:
         from_secret: forgejo_ci_token
     commands:
-      - apk add --no-cache git curl jq
+      - apk add --no-cache git curl jq binutils xz unzip tar
       - ./scripts/run-update.sh stable
 
   update-rc:
@@ -18,7 +18,7 @@ steps:
       FORGEJO_TOKEN:
         from_secret: forgejo_ci_token
     commands:
-      - apk add --no-cache git curl jq
+      - apk add --no-cache git curl jq binutils xz unzip tar
       - ./scripts/run-update.sh rc
 
   update-uos:

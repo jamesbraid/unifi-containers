@@ -112,10 +112,38 @@ jobs:
           build-args: |
             BASE_IMAGE=${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
 
+      - name: Produce seed data (boot the pushed digest, complete the wizard)
+        if: steps.ver.outputs.rc == 'false'
+        run: ./network/seeded/make-seed.sh "$IMAGE@${{ steps.push.outputs.digest }}"
+
+      - name: Build seeded (amd64) and health-gate it (seeded login probe)
+        if: steps.ver.outputs.rc == 'false'
+        run: |
+          docker buildx build --load --platform linux/amd64 \
+            --build-arg "BASE_IMAGE=$IMAGE@${{ steps.push.outputs.digest }}" \
+            -t unifi-network:seedgate network/seeded
+          docker run -d --name seedgate unifi-network:seedgate
+          ./.github/scripts/wait-healthy.sh seedgate 600
+          docker rm -f seedgate
+
+      - name: Push seeded image (multi-arch, from the pushed base digest)
+        if: steps.ver.outputs.rc == 'false'
+        id: pushseeded
+        uses: docker/build-push-action@v6
+        with:
+          context: network/seeded
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.ver.outputs.version }}-seeded
+          build-args: |
+            BASE_IMAGE=${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+
       - name: Move sliding tags where this is the highest stable
         if: steps.ver.outputs.rc == 'false'
         run: |
           ./.github/scripts/sliding-tags.sh "$IMAGE" \
             "${{ steps.ver.outputs.semver }}" \
             "${{ steps.push.outputs.digest }}" \
-            "${{ steps.pushsim.outputs.digest }}"
+            "${{ steps.pushsim.outputs.digest }}" \
+            v \
+            "${{ steps.pushseeded.outputs.digest }}"
