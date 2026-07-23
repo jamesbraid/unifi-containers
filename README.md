@@ -58,6 +58,15 @@ per release in [`docs/sim-keys/`](docs/sim-keys/) — a drift tripwire and
 de facto documentation (notably `demo.username` / `demo.password` /
 `demo.skip_wizard` / `demo.*_model`).
 
+Two things about the demo fleet worth knowing before you write assertions
+against it. Demo device **models randomize per boot** and some drawn models
+are un-adoptable (e.g. legacy `BZ2LR`), so a fleet is not deterministic
+across restarts — pin models via the `demo.*_model` keys if a test needs
+stable hardware. And demo devices arrive **pending-adoption** (no `_id`)
+until a test adopts them; the pool does not refill, so treat sim containers
+as **per-session disposable** rather than reusing one across many
+adopt-heavy runs.
+
 ## Seeded mode
 
 The `-seeded` tags carry a controller whose first-run setup is already
@@ -126,7 +135,11 @@ and the two test variants target one each:
 
 - **UOS ucore API** (`:443`, HTTPS) — the OS itself (`/api/auth/login`,
   `/api/users/self`, settings, backups, updates). The future-proof surface.
-  The `-seeded` variant seeds an Owner here headlessly.
+  The `-seeded` variant seeds an Owner here headlessly. The **platform**
+  version is readable pre-auth at `GET /api/system` → `firmwareVersion`
+  (e.g. `5.1.21`) — no login needed. Don't conflate it with the Network App
+  version below: on `-sim`, `7443` reports the *Network App* version
+  (`10.4.57` for UOS 5.1.21), not the platform's.
 - **Network Application API** (`127.0.0.1:8081` loopback; behind UOS SSO
   externally) — the classic UniFi controller API that go-unifi and
   terraform-provider-unifi target today. `UOS_NETWORK_DIRECT=true` (default
@@ -140,6 +153,11 @@ curl -X POST -H 'Content-Type: application/json' \
 ```
 
 The sim healthcheck only reports healthy once that login answers `rc: ok`.
+Healthy means the API answers — the demo device fleet finishes populating a
+few seconds *after* that, so a test that reads `stat/device` the instant the
+container goes healthy may see an incomplete set; poll for the count you need.
+Note `7443` is plain HTTP: an HTTPS client gets a TLS-handshake error
+(`SSL: WRONG_VERSION_NUMBER`), not a redirect.
 
 The `-sim` (Network App demo, with devices) and `-seeded` (UOS-native owner)
 paths are **mutually exclusive within one container** — a demo Network App
