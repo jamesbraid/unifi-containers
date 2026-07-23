@@ -11,8 +11,8 @@ FROM ubuntu:24.04
 
 ARG DEBIAN_FRONTEND=noninteractive
 
-ARG PKGURL=https://dl.ui.com/unifi/10.4.57/unifi_sysvinit_all.deb
-ARG PKGSHA256=fc378cf8cd2bec3d334bf7b72eabfcd1861e5fae67b9c16735471132105b2072
+ARG PKGURL=https://dl.ui.com/unifi/10.5.66/unifi_sysvinit_all.deb
+ARG PKGSHA256=e77a09985f917f377b477fa204198ae805c0e4aa273f879098b1a8d3677bd732
 
 ARG VERSION=dev
 ARG REVISION=dev

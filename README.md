@@ -19,7 +19,7 @@ Podman, Colima, Kubernetes.
 
 | Image | Version | Release notes |
 |---|---|---|
-| `ghcr.io/jamesbraid/unifi-network` | 10.4.57 | [Release notes](https://community.ui.com/releases/UniFi-Network-Application-10-4-57/92694b29-fd78-4d52-906a-3211136610e2) |
+| `ghcr.io/jamesbraid/unifi-network` | 10.5.66-rc | [Release notes](https://community.ui.com/releases/UniFi-Network-Application-10-5-66/9fd6a940-8f43-4071-a36a-28edcc7e5032) |
 | `ghcr.io/jamesbraid/unifi-os-server` | 5.1.21 | [Release notes](https://community.ui.com/releases) |
 
 ## Tags
