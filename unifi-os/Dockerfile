@@ -27,7 +27,11 @@ ENV APP_MODEL=UOSSERVER \
 RUN mkdir -p /usr/local/uos/init.d
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY docker-healthcheck-uos.sh /usr/local/bin/docker-healthcheck-uos.sh
-RUN chmod 755 /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-healthcheck-uos.sh
+# Copied in always; inert unless UOS_SEED_OWNER=true (the -seeded variant).
+COPY seed-owner.sh /usr/local/bin/uos-seed-owner.sh
+RUN chmod 755 /usr/local/bin/docker-entrypoint.sh \
+              /usr/local/bin/docker-healthcheck-uos.sh \
+              /usr/local/bin/uos-seed-owner.sh
 
 # systemd shutdown signal
 STOPSIGNAL SIGRTMIN+3

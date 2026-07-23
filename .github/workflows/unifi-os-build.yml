@@ -27,11 +27,19 @@ jobs:
           . ./unifi-os/pins.env
           docker build --build-arg UOS_VERSION="$UOS_VERSION" -t unifi-os-server:ci unifi-os/
 
-      - name: Build sim image
-        run: docker build --build-arg BASE_IMAGE=unifi-os-server:ci -t unifi-os-server:ci-sim unifi-os/sim/
-
-      - name: Boot and health-gate sim image (systemd contract + API login probe)
+      - name: Build sim and seeded images
         run: |
-          ./.github/scripts/run-uos.sh uos-ci unifi-os-server:ci-sim
-          ./.github/scripts/wait-healthy.sh uos-ci 900
-          docker rm -f uos-ci
+          docker build --build-arg BASE_IMAGE=unifi-os-server:ci -t unifi-os-server:ci-sim unifi-os/sim/
+          docker build --build-arg BASE_IMAGE=unifi-os-server:ci -t unifi-os-server:ci-seeded unifi-os/seeded/
+
+      - name: Boot and health-gate sim image (Network App demo — admin/admin + devices on 7443)
+        run: |
+          ./.github/scripts/run-uos.sh uos-ci-sim unifi-os-server:ci-sim
+          ./.github/scripts/wait-healthy.sh uos-ci-sim 900
+          docker rm -f uos-ci-sim
+
+      - name: Boot and health-gate seeded image (UOS-native owner on :443)
+        run: |
+          ./.github/scripts/run-uos.sh uos-ci-seeded unifi-os-server:ci-seeded
+          ./.github/scripts/wait-healthy.sh uos-ci-seeded 900
+          docker rm -f uos-ci-seeded
