@@ -96,6 +96,42 @@ EOF
         /etc/systemd/system/sockets.target.wants/uos-network-direct.socket
 fi
 
+# --- Opt-in headless owner seed (UOS-native, cloud-free) ---
+# With UOS_SEED_OWNER=true a systemd oneshot completes the first-run setup
+# after unifi-core is up, via unifi-core's own /api/setup — giving an Owner
+# admin on the UOS API (:443) with no UI account and no setup wizard. The
+# `-seeded` variant turns this on; the base image stays inert without it.
+# systemd services don't inherit the container env, so the resolved values
+# go in an EnvironmentFile the unit reads.
+if [ "${UOS_SEED_OWNER:-0}" = "true" ] || [ "${UOS_SEED_OWNER:-0}" = "1" ]; then
+    mkdir -p /run
+    cat > /run/uos-seed-owner.env <<EOF
+UOS_ADMIN_USER=${UOS_ADMIN_USER:-admin}
+UOS_ADMIN_PASS=${UOS_ADMIN_PASS:-admin}
+UOS_COUNTRY=${UOS_COUNTRY:-840}
+UOS_TIMEZONE=${UOS_TIMEZONE:-UTC}
+UOS_CONSOLE_NAME=${UOS_CONSOLE_NAME:-unifi-os-sim}
+EOF
+    cat > /etc/systemd/system/uos-seed-owner.service <<'EOF'
+[Unit]
+Description=Seed the UOS owner admin headlessly (test target)
+After=unifi-core.service
+Wants=unifi-core.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=-/run/uos-seed-owner.env
+ExecStart=/usr/local/bin/uos-seed-owner.sh
+StandardOutput=journal+console
+StandardError=journal+console
+[Install]
+WantedBy=multi-user.target
+EOF
+    mkdir -p /etc/systemd/system/multi-user.target.wants
+    ln -sfn /etc/systemd/system/uos-seed-owner.service \
+        /etc/systemd/system/multi-user.target.wants/uos-seed-owner.service
+fi
+
 # --- Variant init hooks (e.g. the sim layer) run before systemd ---
 if [ -d /usr/local/uos/init.d ]; then
     run-parts /usr/local/uos/init.d 2>/dev/null || run-parts --regex '.*' /usr/local/uos/init.d

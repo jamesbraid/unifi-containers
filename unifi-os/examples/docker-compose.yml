@@ -1,9 +1,17 @@
 # UniFi OS Server test-target usage. systemd runs as PID 1, so the
 # container needs this exact contract: the cap list (no privileged mode),
 # host cgroup namespace with /sys/fs/cgroup rw, and the tmpfs set.
-# TAG=sim boots straight into a demo controller (admin/admin, seeded demo
-# devices, no wizard); `docker compose up --wait` returns when the bundled
-# Network Application answers a real API login on :8443.
+#
+# Two ready-to-test variants (`docker compose up --wait` returns when healthy):
+#   TAG=sim    — Network App demo: admin/admin + seeded demo devices on the
+#                direct Network API port 7443 (plain HTTP -> :8081). The UOS
+#                ucore API (:443) is left unconfigured in this variant.
+#                Login: curl -X POST -d '{"username":"admin","password":"admin"}' \
+#                  http://localhost:7443/api/login
+#   TAG=seeded — UOS-native: headless-seeded Owner admin on the UOS ucore API
+#                (:443), no wizard, no cloud, no demo devices.
+#                Login: curl -ksX POST -d '{"username":"admin","password":"admin"}' \
+#                  https://localhost:11443/api/auth/login
 services:
   unifi-os:
     image: ghcr.io/jamesbraid/unifi-os-server:${TAG:-sim}

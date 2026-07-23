@@ -3,7 +3,17 @@
 # the keys are in place before the bundled Network Application's first
 # start. Simulation mode seeds an admin/admin account plus demo sites,
 # devices, and networks — no setup wizard needed. Same key set as the
-# standalone unifi-network sim variant.
+# standalone unifi-network sim variant, and (contrary to earlier belief)
+# fully honoured by the UOS-bundled Network App: the `is_simulation` strings
+# only looked "stripped" because they sit inside compressed jar entries that
+# a plain grep of the fat ace.jar can't see.
+#
+# This targets the Network App API (127.0.0.1:8081, exposed on :7443 by
+# UOS_NETWORK_DIRECT). It leaves the UOS ucore API (:443) unconfigured — the
+# demo Network App and unifi-core's /api/setup are mutually exclusive, so the
+# UOS-native owner path lives in the separate `-seeded` variant.
+#
+# Device counts are overridable via DEMO_NUM_UAP / DEMO_NUM_UGW / DEMO_NUM_USW.
 
 SYSPROPS=/var/lib/unifi/system.properties
 
@@ -15,8 +25,8 @@ mkdir -p /var/lib/unifi
 touch "$SYSPROPS"
 
 write_config is_simulation true
-write_config demo.num_uap 3
-write_config demo.num_ugw 1
-write_config demo.num_usw 5
+write_config demo.num_uap "${DEMO_NUM_UAP:-3}"
+write_config demo.num_ugw "${DEMO_NUM_UGW:-1}"
+write_config demo.num_usw "${DEMO_NUM_USW:-5}"
 
 chown unifi:unifi "$SYSPROPS" 2>/dev/null || true
