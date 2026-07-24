@@ -18,5 +18,5 @@ RUN chown -R unifi:unifi /unifi
 COPY docker-healthcheck-seeded.sh /usr/local/bin/docker-healthcheck-seeded.sh
 RUN chmod 755 /usr/local/bin/docker-healthcheck-seeded.sh
 
-HEALTHCHECK --interval=3s --timeout=6s --start-period=5m --retries=5 \
+HEALTHCHECK --interval=10s --timeout=6s --start-period=5m --retries=5 \
   CMD /usr/local/bin/docker-healthcheck-seeded.sh || exit 1

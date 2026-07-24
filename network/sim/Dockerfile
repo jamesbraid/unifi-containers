@@ -23,5 +23,5 @@ COPY demo-mode /usr/local/unifi/init.d/demo-mode
 COPY docker-healthcheck-sim.sh /usr/local/bin/docker-healthcheck-sim.sh
 RUN chmod 755 /usr/local/unifi/init.d/demo-mode /usr/local/bin/docker-healthcheck-sim.sh
 
-HEALTHCHECK --interval=3s --timeout=6s --start-period=5m --retries=5 \
+HEALTHCHECK --interval=10s --timeout=6s --start-period=5m --retries=5 \
   CMD /usr/local/bin/docker-healthcheck-sim.sh || exit 1
