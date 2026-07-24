@@ -26,13 +26,17 @@ Podman, Colima, Kubernetes.
 
 | Variant | Tags |
 |---|---|
-| Base stable | `X.Y.Z`, `X.Y`, `X`, `latest` |
-| Simulation | `X.Y.Z-sim`, `X.Y-sim`, `X-sim`, `sim` |
-| Seeded | `X.Y.Z-seeded`, `X.Y-seeded`, `X-seeded`, `seeded` |
+| Base | `X.Y.Z-N`, `latest` |
+| Simulation | `X.Y.Z-N-sim`, `sim` |
+| Seeded | `X.Y.Z-N-seeded`, `seeded` |
 | Release candidate | `X.Y.Z-rc`, `rc` (base only) |
 
-Sliding tags (`latest`, `sim`, `X`, `X.Y`, …) always point at the highest
-published stable version. RC tags never touch them.
+`N` is the packaging revision (RPM Release / Debian debian_revision): it
+starts at `1` for each new upstream version and bumps when the image is
+rebuilt without an upstream change (a Dockerfile or healthcheck fix). Pin an
+exact `X.Y.Z-N` for immutability. The `latest` / `sim` / `seeded` / `rc`
+pointers slide to the highest published stable (RC only touches `rc`); the
+per-major (`X`) and per-minor (`X.Y`) sliding tags are gone.
 
 ## Simulation mode
 
