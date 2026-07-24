@@ -25,21 +25,22 @@ jobs:
       - name: Parse tag
         id: ver
         run: |
-          version=${GITHUB_REF_NAME#v}          # 10.4.57 or 10.5.62-rc
+          version=${GITHUB_REF_NAME#v}          # 10.4.57-1 (with revision) or 10.5.66-rc
           case "$version" in
-            *-rc) rc=true;  semver=${version%-rc} ;;
-            *)    rc=false; semver=$version ;;
+            *-rc) rc=true ;;
+            *)    rc=false ;;
           esac
+          upstream=${version%-*}                # 10.4.57 — drop the -N revision or -rc (pin check)
           {
             echo "version=$version"
             echo "rc=$rc"
-            echo "semver=$semver"
+            echo "upstream=$upstream"
           } >> "$GITHUB_OUTPUT"
 
       - name: Tag must match the pinned version
         run: |
           pinned=$(sed -n 's#^ARG PKGURL=.*/unifi/\([0-9.]*\)/.*#\1#p' network/Dockerfile)
-          if [ "$pinned" != "${{ steps.ver.outputs.semver }}" ]; then
+          if [ "$pinned" != "${{ steps.ver.outputs.upstream }}" ]; then
             echo "git tag ${{ steps.ver.outputs.version }} != pinned $pinned"
             exit 1
           fi
@@ -139,7 +140,7 @@ jobs:
         if: steps.ver.outputs.rc == 'false'
         run: |
           ./.github/scripts/sliding-tags.sh "$IMAGE" \
-            "${{ steps.ver.outputs.semver }}" \
+            "${{ steps.ver.outputs.version }}" \
             "${{ steps.push.outputs.digest }}" \
             "${{ steps.pushsim.outputs.digest }}" \
             v \

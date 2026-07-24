@@ -38,10 +38,11 @@ jobs:
       - name: Parse tag and check against pins
         id: ver
         run: |
-          version=${GITHUB_REF_NAME#unifi-os-v}
+          version=${GITHUB_REF_NAME#unifi-os-v}   # 5.1.21-1 (with revision)
+          upstream=${version%-*}                  # 5.1.21
           . ./unifi-os/pins.env
-          if [ "$UOS_VERSION" != "$version" ]; then
-            echo "git tag $GITHUB_REF_NAME != pinned $UOS_VERSION"
+          if [ "$UOS_VERSION" != "$upstream" ]; then
+            echo "git tag $GITHUB_REF_NAME (upstream $upstream) != pinned $UOS_VERSION"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
