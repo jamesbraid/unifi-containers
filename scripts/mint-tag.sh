@@ -14,16 +14,18 @@ msg=$(git log -1 --format=%s)
 case "$msg" in
   "network: bump to "*)
     version=${msg#network: bump to }
-    tag="v${version}"
+    # A new upstream version starts at packaging revision 1 (RPM Release /
+    # Debian debian_revision). RCs are ephemeral and carry no revision.
+    # Rebuilds of the same upstream version are tagged by hand: v<ver>-2, -3.
     case "$version" in
-      *-rc) [ "${CI_COMMIT_BRANCH}" = rc ]   || { echo "rc bump outside rc branch" >&2; exit 1; } ;;
-      *)    [ "${CI_COMMIT_BRANCH}" = main ] || { echo "stable bump outside main" >&2; exit 1; } ;;
+      *-rc) [ "${CI_COMMIT_BRANCH}" = rc ]   || { echo "rc bump outside rc branch" >&2; exit 1; }; tag="v${version}" ;;
+      *)    [ "${CI_COMMIT_BRANCH}" = main ] || { echo "stable bump outside main" >&2; exit 1; }; tag="v${version}-1" ;;
     esac
     ;;
   "unifi-os: bump to "*)
     version=${msg#unifi-os: bump to }
-    tag="unifi-os-v${version}"
     [ "${CI_COMMIT_BRANCH}" = main ] || { echo "unifi-os bump outside main" >&2; exit 1; }
+    tag="unifi-os-v${version}-1"
     ;;
   *) echo "not a bump commit; nothing to do"; exit 0 ;;
 esac
