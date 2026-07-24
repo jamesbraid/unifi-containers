@@ -1,5 +1,9 @@
 # unifi-containers
 
+<p align="center">
+  <img src="assets/logo.png" alt="unifi-containers — an otter hugging a stack of shipping containers" width="280">
+</p>
+
 Version-pinned, multi-arch (amd64 + arm64) OCI images of UniFi controllers,
 built as **test targets** for automation: deterministic startup, a health
 signal that means "the controller API is answering", no setup wizard in
