@@ -38,7 +38,9 @@ Podman, Colima, Kubernetes.
 `N` is the packaging revision (RPM Release / Debian debian_revision): it
 starts at `1` for each new upstream version and bumps when the image is
 rebuilt without an upstream change (a Dockerfile or healthcheck fix). Pin an
-exact `X.Y.Z-N` for immutability. The `latest` / `sim` / `seeded` / `rc`
+exact `X.Y.Z-N` for immutability. Version bumps mint their tag automatically;
+cut a rebuild with `scripts/rebuild-tag.py <network|unifi-os> --push`, which
+takes the next revision from the existing tags. The `latest` / `sim` / `seeded` / `rc`
 pointers slide to the highest published stable (RC only touches `rc`); the
 per-major (`X`) and per-minor (`X.Y`) sliding tags are gone.
 
