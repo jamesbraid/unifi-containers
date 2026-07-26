@@ -66,10 +66,15 @@ jobs:
       - name: Health gate both variants (native) — a broken image never publishes
         run: |
           ./.github/scripts/run-uos.sh gate-sim "$IMAGE:${{ steps.ver.outputs.version }}-sim-${{ matrix.arch }}"
-          ./.github/scripts/wait-healthy.sh gate-sim 900
+          ./scripts/wait-healthy.py gate-sim 900
+          ./scripts/assert-uos-api-key.py gate-sim --expect-absent
           docker rm -f gate-sim
           ./.github/scripts/run-uos.sh gate-seeded "$IMAGE:${{ steps.ver.outputs.version }}-seeded-${{ matrix.arch }}"
-          ./.github/scripts/wait-healthy.sh gate-seeded 900
+          ./scripts/wait-healthy.py gate-seeded 900
+          # The seeded variant's whole point is the X-API-KEY: if an upstream
+          # bump moved ULP's mint route, this fails here and the images never
+          # reach GHCR, so the sliding tags never move.
+          ./scripts/assert-uos-api-key.py gate-seeded
           docker rm -f gate-seeded
 
       - name: Log in to GHCR

@@ -35,11 +35,17 @@ jobs:
       - name: Boot and health-gate sim image (Network App demo — admin/admin + devices on 7443)
         run: |
           ./.github/scripts/run-uos.sh uos-ci-sim unifi-os-server:ci-sim
-          ./.github/scripts/wait-healthy.sh uos-ci-sim 900
+          ./scripts/wait-healthy.py uos-ci-sim 900
+          # The sim variant runs the base entrypoint with the seed flags
+          # unset, so it doubles as the proof that the key seed stays inert.
+          ./scripts/assert-uos-api-key.py uos-ci-sim --expect-absent
           docker rm -f uos-ci-sim
 
       - name: Boot and health-gate seeded image (UOS-native owner on :443)
         run: |
           ./.github/scripts/run-uos.sh uos-ci-seeded unifi-os-server:ci-seeded
-          ./.github/scripts/wait-healthy.sh uos-ci-seeded 900
+          ./scripts/wait-healthy.py uos-ci-seeded 900
+          # Healthy already proves the key authenticates; this also proves a
+          # bogus key is rejected and that a restart reuses the key.
+          ./scripts/assert-uos-api-key.py uos-ci-seeded
           docker rm -f uos-ci-seeded
