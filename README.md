@@ -105,11 +105,51 @@ Credentials: **`admin` / `admin`** (override with `UOS_ADMIN_USER` /
 
 ```bash
 TAG=seeded docker compose -f unifi-os/examples/docker-compose.yml up --wait
-# healthcheck = ucore-login probe; then:
+# healthcheck = API-key probe + ucore-login probe; then:
 curl -ks -X POST -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin"}' \
   https://localhost:11443/api/auth/login
 ```
+
+### The seeded X-API-KEY
+
+The same boot mints an **X-API-KEY** and writes it to **`/unifi/api-key`**.
+Production UniFi OS clients authenticate with that header rather than a
+cookie, so a harness holding this key drives the real `/proxy/network`
+dialect and skips SSO entirely.
+
+Read the key whichever way suits the harness:
+
+```bash
+key=$(docker exec <container> cat /unifi/api-key)   # from the container
+key=$(cat /path/to/volume/api-key)                  # from a mounted volume
+
+curl -ks -H "X-API-KEY: $key" \
+  https://localhost:11443/proxy/network/api/s/default/stat/device
+```
+
+The seed also records the key in `/unifi/logs/uos-seed-owner.log`, which is
+where to look when a boot goes wrong. It never reaches `docker logs`.
+
+The path is the contract; the value is not. UniFi OS mints the key itself and
+ignores any value a caller supplies, so expect 32 random characters, fresh for
+each volume, carrying full admin scope and no expiry. Restarts reuse the same
+key. Set `UOS_API_KEY_FILE` or `UOS_API_KEY_NAME` to move or rename it, and
+`UOS_SEED_API_KEY=false` to skip minting.
+
+What the key opens:
+
+| Endpoint | With `X-API-KEY` |
+|---|---|
+| `/proxy/network/api/s/<site>/...` (classic dialect) | works |
+| `/proxy/network/integration/v1/...` (integration API) | works |
+| `/api/...` (ucore, e.g. `/api/users/self`) | **401** — these need a session |
+
+The console's identity service owns API keys, so mint further ones there:
+`POST /api/v2/user/<owner-uuid>/keys` on `127.0.0.1:9080` inside the
+container, taking the owner UUID from `GET /api/v2/info`. unifi-core has no
+API-key route of its own. The `-sim` variant seeds no key, having no UOS
+owner.
 
 ## Using from test harnesses
 
