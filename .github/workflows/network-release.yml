@@ -62,7 +62,7 @@ jobs:
       - name: Health gate — a broken image never publishes
         run: |
           docker run -d --name gate unifi-network:gate
-          ./.github/scripts/wait-healthy.sh gate 600
+          ./scripts/wait-healthy.py gate 600
           docker rm -f gate
 
       - name: Log in to GHCR
@@ -95,7 +95,7 @@ jobs:
             --build-arg "BASE_IMAGE=$IMAGE@${{ steps.push.outputs.digest }}" \
             -t unifi-network:simgate network/sim
           docker run -d --name simgate unifi-network:simgate
-          ./.github/scripts/wait-healthy.sh simgate 600
+          ./scripts/wait-healthy.py simgate 600
           docker rm -f simgate
 
       - name: Push sim image (multi-arch, from the pushed base digest)
@@ -121,7 +121,7 @@ jobs:
             --build-arg "BASE_IMAGE=$IMAGE@${{ steps.push.outputs.digest }}" \
             -t unifi-network:seedgate network/seeded
           docker run -d --name seedgate unifi-network:seedgate
-          ./.github/scripts/wait-healthy.sh seedgate 600
+          ./scripts/wait-healthy.py seedgate 600
           docker rm -f seedgate
 
       - name: Push seeded image (multi-arch, from the pushed base digest)
