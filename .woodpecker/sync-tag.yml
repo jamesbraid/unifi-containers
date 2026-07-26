@@ -17,13 +17,14 @@ when:
 
 steps:
   sync-mirror:
-    image: alpine/git
+    image: ghcr.io/astral-sh/uv:python3.13-alpine
     environment:
       FORGEJO_TOKEN:
         from_secret: forgejo_ci_token
     commands:
-      - apk add --no-cache curl
-      - |
-        curl -fsS -X POST -H "Authorization: token ${FORGEJO_TOKEN}" \
-          "${CI_FORGE_URL}/api/v1/repos/${CI_REPO}/push_mirrors-sync"
-      - echo "mirror sync triggered for ${CI_COMMIT_TAG}"
+      # The call lives in a script on purpose — see scripts/sync-mirror.py for
+      # why an inline curl cannot carry the token. Note that Woodpecker expands
+      # dollar-brace expressions across this file, so do not write one here,
+      # even inside a comment: an expression it cannot parse fails the whole
+      # pipeline before any step runs.
+      - python3 scripts/sync-mirror.py
