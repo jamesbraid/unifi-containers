@@ -101,6 +101,10 @@ fi
 # after unifi-core is up, via unifi-core's own /api/setup — giving an Owner
 # admin on the UOS API (:443) with no UI account and no setup wizard. The
 # `-seeded` variant turns this on; the base image stays inert without it.
+# UOS_SEED_API_KEY=true adds a second step to the same oneshot: mint an
+# X-API-KEY through ULP and publish it at UOS_API_KEY_FILE, so a harness can
+# use the production /proxy/network dialect without SSO. It needs the owner,
+# hence the nesting.
 # systemd services don't inherit the container env, so the resolved values
 # go in an EnvironmentFile the unit reads.
 if [ "${UOS_SEED_OWNER:-0}" = "true" ] || [ "${UOS_SEED_OWNER:-0}" = "1" ]; then
@@ -111,6 +115,9 @@ UOS_ADMIN_PASS=${UOS_ADMIN_PASS:-admin}
 UOS_COUNTRY=${UOS_COUNTRY:-840}
 UOS_TIMEZONE=${UOS_TIMEZONE:-UTC}
 UOS_CONSOLE_NAME=${UOS_CONSOLE_NAME:-unifi-os-sim}
+UOS_SEED_API_KEY=${UOS_SEED_API_KEY:-0}
+UOS_API_KEY_NAME=${UOS_API_KEY_NAME:-unifi-containers-seeded}
+UOS_API_KEY_FILE=${UOS_API_KEY_FILE:-/unifi/api-key}
 EOF
     cat > /etc/systemd/system/uos-seed-owner.service <<'EOF'
 [Unit]
