@@ -169,3 +169,15 @@ def test_a_token_authenticates_without_ever_entering_the_url(bare, local):
     # scrub out of an error message afterwards.
     gitops.push(str(bare), "refs/heads/main:refs/heads/main", token="t0ken", repo=local)
     assert refs(bare) == ["refs/heads/main"]
+
+
+def test_a_named_remote_is_resolved_to_its_url(tmp_path):
+    # push_target falls back to `origin` when there is no CI token, and libgit2
+    # only accepts URLs — handing it the name raised "unsupported URL protocol".
+    repo = pygit2.init_repository(str(tmp_path / "r"))
+    repo.remotes.create("origin", "https://example.invalid/infra/repo.git")
+    assert gitops._anonymous_remote(repo, "origin").url == "https://example.invalid/infra/repo.git"
+    # An actual URL passes through untouched.
+    assert (
+        gitops._anonymous_remote(repo, "https://x.invalid/y.git").url == "https://x.invalid/y.git"
+    )
