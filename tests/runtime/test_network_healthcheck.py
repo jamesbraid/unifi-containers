@@ -68,3 +68,24 @@ def test_a_failed_probe_keeps_probing(httpserver, tmp_path, login_probe):
     assert not healthcheck.marker_gate(login_probe, str(marker))
     httpserver.assert_request_made(LOGIN, count=2)
     httpserver.check()
+
+
+def test_the_probe_follows_the_port_system_properties_pins(tmp_path):
+    """The controller obeys system.properties, so the probe has to as well.
+
+    write_system_properties supplies 8443 only when the key is absent, so a
+    volume carried over from another deployment keeps its own port. The three
+    deleted shell healthchecks read it; a probe fixed at 8443 polls a port
+    nothing listens on and the container never goes healthy.
+    """
+    props = tmp_path / "system.properties"
+    props.write_text("unifi.https.port=9443\nunifi.http.port=8080\n")
+    assert healthcheck.network_url(str(props)) == "https://localhost:9443"
+
+
+def test_the_probe_falls_back_to_the_documented_default(tmp_path):
+    missing = tmp_path / "absent"
+    assert healthcheck.network_url(str(missing)).endswith(":8443")
+    empty = tmp_path / "system.properties"
+    empty.write_text("unifi.http.port=8080\n")
+    assert healthcheck.network_url(str(empty)).endswith(":8443")

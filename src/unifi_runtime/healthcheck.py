@@ -10,6 +10,7 @@ once and is a file test thereafter, and probe parts run rate-limited last.
 import os
 import sys
 
+from . import sysprops
 from .env import is_enabled, setting
 from .http import json_request
 from .seed.network_wizard import SEED_PASS, SEED_USER
@@ -80,19 +81,36 @@ def _read(path):
 
 # --- UniFi Network Application probes ---------------------------------
 
-#: Fixed rather than read back out of system.properties: no image moves the
-#: HTTPS port off the default.
-NETWORK_URL = "https://localhost:8443"
+#: What the images write when the key is absent. An existing /unifi volume may
+#: carry a different one, and the controller obeys the file, not this.
+DEFAULT_HTTPS_PORT = "8443"
+SYSPROPS_PATH = "/unifi/data/system.properties"
 
 
-def network_answering(base_url=NETWORK_URL, timeout=PROBE_TIMEOUT):
+def network_url(path=SYSPROPS_PATH, host="localhost"):
+    """Where the controller serves HTTPS, according to system.properties.
+
+    The port is the file's to decide: `write_system_properties` only supplies a
+    default when the key is absent, so a volume that pins another one keeps it.
+    A probe fixed at 8443 would then poll a port nothing listens on and the
+    container could never go healthy.
+    """
+    try:
+        with open(path) as handle:
+            port = sysprops.parse(handle.read()).get("unifi.https.port")
+    except OSError:
+        port = None
+    return f"https://{host}:{port or DEFAULT_HTTPS_PORT}"
+
+
+def network_answering(base_url=None, timeout=PROBE_TIMEOUT):
     """Base image: the HTTPS listener answers. Goes green 5-20s before the API can log in."""
-    return 200 <= json_request(base_url, timeout=timeout).status < 400
+    return 200 <= json_request(base_url or network_url(), timeout=timeout).status < 400
 
 
-def network_login_ready(username, password, base_url=NETWORK_URL, timeout=PROBE_TIMEOUT):
+def network_login_ready(username, password, base_url=None, timeout=PROBE_TIMEOUT):
     """-sim and -seeded: the controller can genuinely authenticate."""
-    return NetworkApp(base_url, timeout=timeout).login_ok(username, password)
+    return NetworkApp(base_url or network_url(), timeout=timeout).login_ok(username, password)
 
 
 def _network_sim():
