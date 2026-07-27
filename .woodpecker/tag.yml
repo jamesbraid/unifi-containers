@@ -1,14 +1,19 @@
+# Cut a release tag when a push makes one due: the version a product pins has no
+# release tag yet. A content check, so it is idempotent and cuts nothing when
+# nothing is due. Rebuilds stay deliberate and manual.
 when:
   - event: push
     branch: [main, rc]
 
 steps:
-  mint-tag:
-    image: alpine/git
-    # mint-tag needs curl for the release-time mirror sync
+  cut-release:
+    image: ghcr.io/astral-sh/uv:python3.13-alpine
     environment:
       FORGEJO_TOKEN:
         from_secret: forgejo_ci_token
     commands:
-      - apk add --no-cache curl
-      - ./scripts/mint-tag.sh
+      # No git package needed, and none present: cut-release fetches the tags
+      # itself through pygit2, over its bundled libgit2 and the image's CA
+      # bundle. A shell `git fetch` here failed silently and left it deciding
+      # against an empty tag list.
+      - uv run -p 3.13 unifi-containers cut-release --all --push

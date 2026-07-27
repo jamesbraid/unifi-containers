@@ -2,6 +2,9 @@ when:
   - event: cron
   - event: manual
 
+# The lanes talk to the forge over pyforgejo and unpack the deb with
+# python-debian, so the image needs nothing added: no curl, jq, binutils, xz,
+# unzip, tar, and no git either, since pygit2 carries its own transport.
 steps:
   update-stable:
     image: ghcr.io/astral-sh/uv:python3.13-alpine
@@ -9,8 +12,7 @@ steps:
       FORGEJO_TOKEN:
         from_secret: forgejo_ci_token
     commands:
-      - apk add --no-cache git curl jq binutils xz unzip tar
-      - ./scripts/run-update.sh stable
+      - uv run -p 3.13 unifi-containers update stable
 
   update-rc:
     image: ghcr.io/astral-sh/uv:python3.13-alpine
@@ -18,8 +20,7 @@ steps:
       FORGEJO_TOKEN:
         from_secret: forgejo_ci_token
     commands:
-      - apk add --no-cache git curl jq binutils xz unzip tar
-      - ./scripts/run-update.sh rc
+      - uv run -p 3.13 unifi-containers update rc
 
   update-uos:
     image: ghcr.io/astral-sh/uv:python3.13-alpine
@@ -27,5 +28,4 @@ steps:
       FORGEJO_TOKEN:
         from_secret: forgejo_ci_token
     commands:
-      - apk add --no-cache git curl jq
-      - ./scripts/run-update.sh uos
+      - uv run -p 3.13 unifi-containers update uos

@@ -1,0 +1,17 @@
+# The root build context exists for one COPY: src/unifi_runtime. Everything
+# else is either CI-only or, in .venv's case, hundreds of megabytes of upload.
+.git
+.github
+.woodpecker
+docs
+tests
+assets
+src/unifi_containers
+src/*.egg-info
+.venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
+.mypy_cache
+network/seeded/seed.tgz

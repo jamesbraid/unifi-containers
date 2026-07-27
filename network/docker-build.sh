@@ -1,83 +1,75 @@
 #!/usr/bin/env bash
+#
+# Build-time bootstrap for the UniFi Network image. Deliberately still
+# shell: it runs against a bare ubuntu:24.04 that has no interpreter until
+# this script installs one, it runs only at build time, and every failure
+# aborts the layer loudly.
 
-# fail on error
-set -e
+# pipefail so a failed `curl | gpg` aborts here rather than writing an empty
+# keyring and failing later as an unrelated-looking apt error.
+set -euo pipefail
 
-# Retry 5 times with a wait of 10 seconds between each retry
-tryfail() {
-    for i in $(seq 1 5);
-        do [ $i -gt 1 ] && sleep 10; $* && s=0 && break || s=$?; done;
-    (exit $s)
-}
+BASEDIR=/usr/lib/unifi
+DATADIR=/unifi/data
+LOGDIR=/unifi/log
+RUNDIR=/unifi/run
 
-# Try multiple keyservers in case of failure
-addKey() {
-    for server in $(shuf -e ha.pool.sks-keyservers.net \
-        hkp://p80.pool.sks-keyservers.net:80 \
-        keyserver.ubuntu.com \
-        hkp://keyserver.ubuntu.com:80 \
-        pgp.mit.edu) ; do \
-        if apt-key adv --keyserver "$server" --recv "$1"; then
-            exit 0
-        fi
-    done
-    return 1
-}
-
-if [ "x${1}" == "x" ]; then
+if [ -z "${1:-}" ]; then
     echo "usage: docker-build.sh PKGURL PKGSHA256" >&2
     exit 1
 fi
-if [ "x${2}" == "x" ]; then
+if [ -z "${2:-}" ]; then
     echo "refusing to build without a pinned sha256 for ${1}" >&2
     exit 1
 fi
 
 apt-get update
+# The deb's own dependencies are listed here, not left to the deb install
+# below, because only this call can pass --no-install-recommends.
+#
+# python3 is explicit: the entrypoint, the healthcheck and the init hooks are
+# all `python3 -m` invocations, so it must not be a transitive dependency.
 apt-get install -qy --no-install-recommends \
     binutils \
     ca-certificates \
     curl \
-    dirmngr \
     gpg \
-    gpg-agent \
-    libcap2-bin \
     logrotate \
     openjdk-25-jre-headless \
     procps \
-    software-properties-common \
+    python3 \
     tzdata
 
-# Install MongoDB 6 - as the Unifi deb package will check
-
+# The deb wants mongodb-org-server >=3.6 <8.1 and Ubuntu 24.04 ships no
+# mongodb-server at all, so it comes from MongoDB's own repo. `jammy`, not
+# `noble`: MongoDB published no 6.0 series for noble.
 curl -Ls https://www.mongodb.org/static/pgp/server-6.0.asc | gpg --dearmor -o /usr/share/keyrings/mongo.gpg
-echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongo.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" | tee /etc/apt/sources.list.d/mongodb-org-5.0.list
-apt update
-apt install -qy mongodb-org-server
+echo "deb [ arch=amd64,arm64 signed-by=/usr/share/keyrings/mongo.gpg ] https://repo.mongodb.org/apt/ubuntu jammy/mongodb-org/6.0 multiverse" \
+    | tee /etc/apt/sources.list.d/mongodb-org-6.0.list
+apt-get update
+apt-get install -qy mongodb-org-server
 
-echo 'deb https://www.ui.com/downloads/unifi/debian stable ubiquiti' | tee /etc/apt/sources.list.d/100-ubnt-unifi.list
-tryfail apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv 06E85760C0A52C50
-
-if [ -d "/usr/local/docker/pre_build/$(dpkg --print-architecture)" ]; then
-    find "/usr/local/docker/pre_build/$(dpkg --print-architecture)" -type f -exec '{}' \;
-fi
-
+# By URL and sha256, never from Ubiquiti's apt repo — the pin is the point.
 curl -L -o ./unifi.deb "${1}"
 echo "${2}  ./unifi.deb" | sha256sum -c -
-apt -qy install ./unifi.deb
+apt-get -qy install ./unifi.deb
 rm -f ./unifi.deb
-chown -R unifi:unifi /usr/lib/unifi
+chown -R unifi:unifi ${BASEDIR}
 rm -rf /var/lib/apt/lists/*
 
-rm -rf ${ODATADIR} ${OLOGDIR} ${ORUNDIR} ${BASEDIR}/data ${BASEDIR}/run ${BASEDIR}/logs
+# State lives on one volume. The BASEDIR symlinks are NOT created here:
+# `unifi-network-service-helper init` owns them and re-points them on every boot.
+#
+# The /var/{lib,log,run}/unifi links do stay: the deb hardcodes those paths
+# in places we do not control, and the sim hook writes system.properties
+# through /var/lib/unifi so it shares one implementation with the UniFi OS
+# variant.
+rm -rf /var/lib/unifi /var/log/unifi /var/run/unifi \
+       ${BASEDIR}/data ${BASEDIR}/run ${BASEDIR}/logs
 mkdir -p ${DATADIR} ${LOGDIR} ${RUNDIR}
-ln -s ${DATADIR} ${BASEDIR}/data
-ln -s ${RUNDIR} ${BASEDIR}/run
-ln -s ${LOGDIR} ${BASEDIR}/logs
-ln -s ${DATADIR} ${ODATADIR}
-ln -s ${LOGDIR} ${OLOGDIR}
-ln -s ${RUNDIR} ${ORUNDIR}
-mkdir -p /var/cert ${CERTDIR}
-ln -s ${CERTDIR} /var/cert/unifi
+ln -s ${DATADIR} /var/lib/unifi
+ln -s ${LOGDIR} /var/log/unifi
+ln -s ${RUNDIR} /var/run/unifi
+chown -R unifi:unifi /unifi
 
 rm -rf "${0}"

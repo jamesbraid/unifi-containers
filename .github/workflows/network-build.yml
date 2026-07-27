@@ -1,11 +1,34 @@
 name: network build
 
+# The path lists are duplicated rather than shared with a YAML anchor:
+# GitHub Actions does not reliably honour anchors in workflow files, and a
+# silently-ignored trigger here means a broken image ships.
+#
+# src/unifi_runtime/** is load-bearing: the entrypoint and healthchecks
+# now live in the shared package and are COPY'd into the image, so a change
+# there changes the image without touching network/.
 on:
   pull_request:
-    paths: ["network/**", ".github/workflows/network-build.yml", ".github/scripts/**"]
+    paths:
+      - "network/**"
+      - "src/unifi_runtime/**"
+      - "src/unifi_containers/**"
+      - ".github/workflows/network-build.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "tests/integration/**"
+      - "tests/conftest.py"
   push:
     branches: [main, rc]
-    paths: ["network/**", ".github/workflows/network-build.yml", ".github/scripts/**"]
+    paths:
+      - "network/**"
+      - "src/unifi_runtime/**"
+      - "src/unifi_containers/**"
+      - ".github/workflows/network-build.yml"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "tests/integration/**"
+      - "tests/conftest.py"
 
 permissions:
   contents: read
@@ -16,23 +39,38 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
       # Plain `docker build` throughout: the sim build must resolve the
       # just-built base image from the local daemon, which the buildx
       # container driver cannot do.
+      #
+      # Root build context: the shared package lives at src/ and COPY cannot
+      # reach outside its context. The sim variant keeps its small context —
+      # it inherits the package and PYTHONPATH from the base image.
       - name: Build base image (amd64)
-        run: docker build -t unifi-network:ci network/
+        run: docker build -f network/Dockerfile -t unifi-network:ci .
 
-      - name: Boot and health-gate base image
-        run: |
-          docker run -d --name unifi-ci unifi-network:ci
-          ./scripts/wait-healthy.py unifi-ci 600
-          docker rm -f unifi-ci
+      # The tests run on uv's python-build-standalone; this runs on the
+      # image's own interpreter, which is what actually executes in
+      # production. It catches a module that will not import there at all.
+      - name: Shipped package imports on the image's own interpreter
+        run: docker run --rm --entrypoint /usr/bin/python3 unifi-network:ci -m unifi_runtime.selfcheck
 
       - name: Build sim image
         run: docker build --build-arg BASE_IMAGE=unifi-network:ci -t unifi-network:ci-sim network/sim/
 
-      - name: Boot and health-gate sim image (API login probe)
-        run: |
-          docker run -d --name unifi-ci-sim unifi-network:ci-sim
-          ./scripts/wait-healthy.py unifi-ci-sim 600
-          docker rm -f unifi-ci-sim
+      # One step, and the fixtures tear their containers down even when an
+      # assertion fails -- which the previous boot/wait/rm sequence could not,
+      # because `docker rm -f` was its own step and got skipped on failure.
+      #
+      # `-k network` keeps the UOS half out; `not seeded` keeps the seeded test
+      # out too. Its image needs seed.tgz, which only a release run produces, so
+      # selecting it here booted the last published seeded image instead.
+      - name: Integration suite against the images just built
+        env:
+          UNIFI_TEST_NETWORK_IMAGE: unifi-network:ci
+          UNIFI_TEST_NETWORK_SIM_IMAGE: unifi-network:ci-sim
+        run: uv run -p 3.13 --extra test pytest tests/integration -m integration -k "network and not seeded"

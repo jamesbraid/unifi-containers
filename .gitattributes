@@ -1,0 +1,6 @@
+# Generated and third-party trees: collapsed in diffs and excluded from language
+# stats, so a review shows only what somebody wrote. Still committed — the lock
+# is what makes CI reproducible, and the vendored package ships in an image that
+# has no pip.
+uv.lock                        linguist-generated=true -diff
+src/unifi_runtime/_vendor/**   linguist-vendored=true  -diff
