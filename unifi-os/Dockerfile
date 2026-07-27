@@ -1,6 +1,12 @@
-# UniFi OS Server as a test target. Built FROM the OCI image embedded in
-# the official installer (see extract-uos.sh), layering a container-shaped
-# entrypoint (single /unifi volume, persisted UUID, init hooks) over it.
+# UniFi OS Server as a test target. Built FROM the OCI image embedded in the
+# official installer (`unifi-containers extract-uos <arch>` unpacks and loads
+# it), layering a container-shaped entrypoint (single /unifi volume, persisted
+# UUID, init hooks) over it.
+#
+# Built from the REPO ROOT, because the shipped Python package lives outside
+# this directory and COPY cannot reach outside its context:
+#   docker build -f unifi-os/Dockerfile --build-arg UOS_VERSION=5.1.21 \
+#     -t unifi-os-server:local .
 #
 # Runtime contract (see examples/docker-compose.yml for the full list):
 # systemd is PID 1 — needs the documented cap list (no privileged mode),
@@ -20,18 +26,28 @@ LABEL org.opencontainers.image.source="https://github.com/jamesbraid/unifi-conta
 
 # The stock image's own entrypoint expects these; FIRMWARE_PLATFORM is
 # stamped per-arch by our entrypoint at runtime.
+#
+# PYTHONPATH is the contract the derived variants inherit: the entrypoint,
+# the healthchecks and the owner seed are all `python3 -m` invocations of
+# the package below. Debian 11 ships python 3.9.2 with no pip, so the
+# package is stdlib-only by construction.
 ENV APP_MODEL=UOSSERVER \
     PRODUCT_NAME=uosserver \
-    APP_VERSION=${UOS_VERSION}
+    APP_VERSION=${UOS_VERSION} \
+    PYTHONPATH=/usr/local/lib/unifi-containers \
+    PYTHONDONTWRITEBYTECODE=1
 
 RUN mkdir -p /usr/local/uos/init.d
-COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
-COPY docker-healthcheck-uos.sh /usr/local/bin/docker-healthcheck-uos.sh
-# Copied in always; inert unless UOS_SEED_OWNER=true (the -seeded variant).
-COPY seed-owner.sh /usr/local/bin/uos-seed-owner.sh
-RUN chmod 755 /usr/local/bin/docker-entrypoint.sh \
-              /usr/local/bin/docker-healthcheck-uos.sh \
-              /usr/local/bin/uos-seed-owner.sh
+COPY src/unifi_runtime /usr/local/lib/unifi-containers/unifi_runtime
+
+# Shipped disabled. Each is enabled either by its variant's Dockerfile or, on
+# this image, by the entrypoint when the matching UOS_* env flag is set.
+# `systemd-analyze verify` turns a malformed unit or a moved ExecStart binary
+# into a build failure instead of a silent no-start at boot.
+COPY unifi-os/units/ /etc/systemd/system/
+RUN systemd-analyze verify /etc/systemd/system/uos-network-direct.socket \
+      /etc/systemd/system/uos-network-direct.service \
+      /etc/systemd/system/uos-seed-owner.service
 
 # systemd shutdown signal
 STOPSIGNAL SIGRTMIN+3
@@ -44,6 +60,6 @@ VOLUME ["/unifi"]
 EXPOSE 443/tcp 8080/tcp 7443/tcp 3478/udp 10003/udp
 
 HEALTHCHECK --interval=10s --timeout=8s --start-period=10m --retries=6 \
-  CMD /usr/local/bin/docker-healthcheck-uos.sh || exit 1
+  CMD ["/usr/bin/python3", "-m", "unifi_runtime.healthcheck", "uos"]
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+ENTRYPOINT ["/usr/bin/python3", "-m", "unifi_runtime.entrypoint.uos"]
