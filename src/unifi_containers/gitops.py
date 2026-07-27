@@ -105,6 +105,21 @@ class _PushReport(pygit2.RemoteCallbacks):
             self.rejected.append(f"{refname}: {message}")
 
 
+def _anonymous_remote(repo, url):
+    """A remote for `url`, which may be a configured remote's name instead.
+
+    libgit2 only takes URLs, so `push_target`'s local fallback of `origin` has to
+    be resolved here rather than handed straight to it.
+    """
+    try:
+        url = repo.remotes[url].url
+    except (KeyError, ValueError):
+        # Not a configured remote. ValueError covers anything libgit2 will not
+        # even consider a remote *name*, such as a path or a URL.
+        pass
+    return repo.remotes.create_anonymous(url)
+
+
 def reset_to_remote_branch(url, branch, token=None, repo=None):
     """Put the worktree on `branch` exactly as the remote has it, discarding local work.
 
@@ -113,7 +128,7 @@ def reset_to_remote_branch(url, branch, token=None, repo=None):
     its PR carries the other lane's bump.
     """
     repo = repo or repository()
-    remote = repo.remotes.create_anonymous(url)
+    remote = _anonymous_remote(repo, url)
     callbacks = pygit2.RemoteCallbacks(pygit2.UserPass("oauth2", token) if token else None)
     try:
         remote.fetch([f"+refs/heads/{branch}:refs/remotes/lane/{branch}"], callbacks=callbacks)
@@ -133,7 +148,7 @@ def fetch_tags(url, token=None, repo=None):
     all and computed build 1 for a version that was already released.
     """
     repo = repo or repository()
-    remote = repo.remotes.create_anonymous(url)
+    remote = _anonymous_remote(repo, url)
     callbacks = pygit2.RemoteCallbacks(pygit2.UserPass("oauth2", token) if token else None)
     try:
         remote.fetch(
@@ -147,7 +162,7 @@ def push(url, refspec, token=None, force=False, repo=None):
     """Push one refspec, raising unless the remote confirms it took the update."""
     repo = repo or repository()
     report = _PushReport(pygit2.UserPass("oauth2", token) if token else None)
-    remote = repo.remotes.create_anonymous(url)
+    remote = _anonymous_remote(repo, url)
     try:
         remote.push([f"+{refspec}" if force else refspec], callbacks=report)
     except pygit2.GitError as exc:
