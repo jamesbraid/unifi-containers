@@ -1,0 +1,8 @@
+[Unit]
+Description=Direct (SSO-free) UniFi Network API port
+
+[Socket]
+ListenStream=7443
+
+[Install]
+WantedBy=sockets.target
