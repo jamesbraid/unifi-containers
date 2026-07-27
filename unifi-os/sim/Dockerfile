@@ -9,19 +9,25 @@
 #   curl -X POST -H 'Content-Type: application/json' \
 #     -d '{"username":"admin","password":"admin"}' http://localhost:7443/api/login
 #
+# Small context, unlike the base image: this layer adds one init hook and
+# inherits PYTHONPATH and the shipped package from the base.
+#
 # Build against a published base tag:
 #   docker build --build-arg BASE_IMAGE=ghcr.io/jamesbraid/unifi-os-server:5.1.21 \
 #     -t unifi-os-server:5.1.21-sim unifi-os/sim/
 ARG BASE_IMAGE=ghcr.io/jamesbraid/unifi-os-server:latest
 FROM ${BASE_IMAGE}
 
+# This variant always wants the direct port, so it is enabled here rather than
+# left to the entrypoint. The env flag stays set so `docker inspect` still shows
+# which knob this variant has turned on.
 ENV UOS_NETWORK_DIRECT=true
+RUN systemctl enable uos-network-direct.socket
 
 COPY demo-mode /usr/local/uos/init.d/demo-mode
-COPY docker-healthcheck-sim.sh /usr/local/bin/docker-healthcheck-sim.sh
-RUN chmod 755 /usr/local/uos/init.d/demo-mode /usr/local/bin/docker-healthcheck-sim.sh
+RUN chmod 755 /usr/local/uos/init.d/demo-mode
 
 EXPOSE 7443/tcp
 
 HEALTHCHECK --interval=10s --timeout=8s --start-period=10m --retries=6 \
-  CMD /usr/local/bin/docker-healthcheck-sim.sh || exit 1
+  CMD ["/usr/bin/python3", "-m", "unifi_runtime.healthcheck", "sim"]

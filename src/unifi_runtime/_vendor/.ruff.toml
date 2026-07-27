@@ -1,0 +1,8 @@
+# Vendored third-party code, copied verbatim (see README.md) — not ours to
+# restyle, and a modernised copy is a copy that can no longer be diffed against
+# upstream. The exemption lives next to what it exempts rather than as a path
+# pattern in the root config that would rot if this directory moved.
+extend-exclude = ["*"]
+
+[lint]
+select = []

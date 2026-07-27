@@ -28,21 +28,54 @@ Podman, Colima, Kubernetes.
 
 ## Tags
 
-| Variant | Tags |
+| Variant | Image tags |
 |---|---|
-| Base | `X.Y.Z-N`, `latest` |
-| Simulation | `X.Y.Z-N-sim`, `sim` |
-| Seeded | `X.Y.Z-N-seeded`, `seeded` |
+| Base | `X.Y.Z`, `latest` |
+| Simulation | `X.Y.Z-sim`, `sim` |
+| Seeded | `X.Y.Z-seeded`, `seeded` |
 | Release candidate | `X.Y.Z-rc`, `rc` (base only) |
 
-`N` is the packaging revision (RPM Release / Debian debian_revision): it
-starts at `1` for each new upstream version and bumps when the image is
-rebuilt without an upstream change (a Dockerfile or healthcheck fix). Pin an
-exact `X.Y.Z-N` for immutability. Version bumps mint their tag automatically;
-cut a rebuild with `scripts/rebuild-tag.py <network|unifi-os> --push`, which
-takes the next revision from the existing tags. The `latest` / `sim` / `seeded` / `rc`
-pointers slide to the highest published stable (RC only touches `rc`); the
-per-major (`X`) and per-minor (`X.Y`) sliding tags are gone.
+`X.Y.Z` is the upstream version. Build numbers are a git concept and never
+appear as an image tag: `X.Y.Z-sim` is the current build of that upstream
+version, and it moves when we rebuild the image without an upstream change — a
+Dockerfile or healthcheck fix. `latest` / `sim` / `seeded` follow the *highest*
+stable upstream version, not the most recent release, so rebuilding an older
+version does not drag them backwards; `rc` follows the newest release
+candidate.
+
+**For something that never moves, pin the digest** (`image@sha256:…`). Every
+other name slides. `docker inspect` reports what you actually have in
+`org.opencontainers.image.version` and which commit built it in
+`org.opencontainers.image.revision`.
+
+The consequence of everything sliding: a superseded build ends up untagged and
+becomes garbage-collectable, so rolling back means cutting a new build rather
+than repointing at an old one.
+
+An RC release only ever moves `X.Y.Z-rc` and `rc`, never `latest`.
+
+### Cutting a release
+
+Git tags are product-scoped and carry the build number:
+`network/10.4.57-1`, `unifi-os/5.1.21-3`, `network/10.5.66-rc-1`.
+
+The version comes from the pins, the build number from the tags. So a bump is
+automatic — the updater rewrites the pin, and CI notices the pinned version has
+no tag yet and cuts build 1. A rebuild is deliberate:
+
+```bash
+unifi-containers cut-release --all                      # what is due; no --push, no tag
+unifi-containers cut-release network --rebuild --push   # next build of the pinned version
+```
+
+Pushing the tag is the whole release trigger: the mirror to GitHub syncs on
+push, so a tag reaching the canonical repo reaches the image build by itself.
+Nothing in this repo asks anything to synchronise.
+
+Tags from before this scheme are archived under `legacy/` and still
+checkout-able. They were not renamed because they could not be: `v10.4.57` and
+`v10.4.57-1` are different commits and were different published releases, so
+both would have mapped onto `network/10.4.57-1`.
 
 ## Simulation mode
 
@@ -63,9 +96,9 @@ or `TAG=sim docker compose -f network/examples/docker-compose.yml up --wait`.
 
 Simulation fidelity (which writes stick, how stats evolve) is a per-version
 empirical question — treat it as a controller-API test double, not a
-device-network emulator. The full simulation/demo key set is enumerated
-per release in [`docs/sim-keys/`](docs/sim-keys/) — a drift tripwire and
-de facto documentation (notably `demo.username` / `demo.password` /
+device-network emulator. `unifi-containers sim-keys <version>` prints the
+full simulation/demo key set a release ships, which doubles as the de facto
+documentation for it (notably `demo.username` / `demo.password` /
 `demo.skip_wizard` / `demo.*_model`).
 
 Two things about the demo fleet worth knowing before you write assertions
@@ -85,8 +118,7 @@ no demo devices, real empty site. The two products seed different API
 surfaces (see below), so their credentials differ.
 
 **`unifi-network:seeded`** — the Network App wizard is completed at image
-build time. Fastest cold start of all variants.
-Credentials: **`admin` / `unifi-containers-seeded`**
+build time. Credentials: **`admin` / `unifi-containers-seeded`**
 
 ```bash
 docker run -d --name unifi -p 8443:8443 ghcr.io/jamesbraid/unifi-network:seeded
@@ -130,8 +162,11 @@ curl -ks -H "X-API-KEY: $key" \
   https://localhost:11443/proxy/network/api/s/default/stat/device
 ```
 
-The seed also records the key in `/unifi/logs/uos-seed-owner.log`, which is
-where to look when a boot goes wrong. It never reaches `docker logs`.
+The seed records the key in `/unifi/logs/uos-seed-owner.log` and in `docker logs`,
+either of which is a second way to fetch it and the first place to look when a
+boot goes wrong. That is deliberate: this is a random key on an `admin`/`admin`
+test target, so it is not a secret worth hiding. Do not treat these images as
+somewhere to keep one.
 
 The path is the contract; the value is not. UniFi OS mints the key itself and
 ignores any value a caller supplies, so expect 32 random characters, fresh for
@@ -161,18 +196,19 @@ healthy-wait strategy is a correct readiness signal:
 - **docker compose**: `docker compose up --wait`
 - **testcontainers (any language)**: use the container-healthy wait
   strategy, e.g. Go: `wait.ForHealthCheck()`; Java:
-  `Wait.forHealthcheck()`. Give it a generous startup timeout (first pull
-  + boot); container reuse across tests works well with the sim/seeded
-  variants since state is deterministic.
-- **Startup budgets** (indicative, Apple Silicon / native arm64; CI gate
-  timeouts are the enforced ceiling): seeded ≈ 15 s, sim ≈ 30–40 s,
-  UOS sim ≈ 1–5 min to healthy.
+  `Wait.forHealthcheck()`. Container reuse across tests works well with the
+  sim/seeded variants since state is deterministic.
+- **Startup budgets**, measured to healthy on Apple Silicon / native arm64:
+  `unifi-network:sim` 39 s; `unifi-os-server` base 32 s, `-sim` 66 s,
+  `-seeded` 78 s. Size your own timeout off the CI gate's ceilings instead —
+  300 s for the network images, 900 s for UOS — because a cold pull and an
+  emulated arch both dwarf the boot itself.
 - **Colima / Docker Desktop / Podman**: all fine for `unifi-network`.
-  For `unifi-os-server`, the runtime needs cgroup v2 and the documented
-  capability/cgroup/tmpfs contract (see `unifi-os/examples/`); Colima
-  works out of the box. [sysbox-runc](https://github.com/nestybox/sysbox)
-  can run systemd containers without the explicit capability list — an
-  option, not a requirement.
+  `unifi-os-server` additionally needs cgroup v2 and the runtime contract
+  below; Colima works out of the box.
+  [sysbox-runc](https://github.com/nestybox/sysbox) can run systemd
+  containers without the explicit capability list — an option, not a
+  requirement.
 
 `ghcr.io/jamesbraid/unifi-os-server` runs the full UOS stack with systemd
 as PID 1, which needs an explicit runtime contract — capability list (no
@@ -216,13 +252,14 @@ variant that matches the API surface you're testing.
 
 ## Attribution and licensing
 
-- The `network/` build is vendored from
+- The `network/` entrypoint and healthchecks are written against Ubiquiti's
+  own `unifi.init` and `unifi-network-service-helper` from the deb. An
+  earlier version was vendored from
   [jacobalberty/unifi-docker](https://github.com/jacobalberty/unifi-docker)
-  (MIT). The original copyright notice is retained at
-  `network/LICENSE.upstream`.
-- The Ubuntu 24.04 / Java 25 / MongoDB 6 modernization is by Joshua Stark
-  ([jacobalberty/unifi-docker#903](https://github.com/jacobalberty/unifi-docker/pull/903)),
-  carried here with original authorship.
+  (MIT); the Ubuntu 24.04 / Java 25 / MongoDB 6 modernization of that build
+  is by Joshua Stark
+  ([jacobalberty/unifi-docker#903](https://github.com/jacobalberty/unifi-docker/pull/903)).
+  Both remain in the git history with their original authorship.
 - The `unifi-os/` extraction approach and single-volume entrypoint layout
   are adapted from
   [toquanghieu/unifi-os-server-docker](https://github.com/toquanghieu/unifi-os-server-docker)

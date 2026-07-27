@@ -1,0 +1,9 @@
+# No [Install] section: the socket unit above is what gets enabled, and
+# socket activation starts the same-named service on the first connection.
+[Unit]
+Description=Proxy the direct Network API port to the integrated app
+Requires=uos-network-direct.socket
+After=uos-network-direct.socket
+
+[Service]
+ExecStart=/lib/systemd/systemd-socket-proxyd 127.0.0.1:8081

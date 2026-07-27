@@ -1,0 +1,19 @@
+# A systemd unit inherits nothing from the container environment, which is why
+# PYTHONPATH is spelled out here and why the resolved settings arrive as an
+# EnvironmentFile the entrypoint writes rather than as the unit's own env.
+[Unit]
+Description=Seed the UOS owner admin headlessly (test target)
+After=unifi-core.service
+Wants=unifi-core.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=PYTHONPATH=/usr/local/lib/unifi-containers
+EnvironmentFile=-/run/uos-seed-owner.env
+ExecStart=/usr/bin/python3 -m unifi_runtime.seed.uos_owner
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

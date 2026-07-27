@@ -5,7 +5,8 @@
 services:
   unifi:
     image: ghcr.io/jamesbraid/unifi-network:${TAG:-sim}
-    init: true
+    # No `init: true` needed: the entrypoint runs the controller in its own
+    # process group and signals the group, so MongoDB closes cleanly on stop.
     ports:
       - "8443:8443"   # controller GUI/API (https)
       - "8080:8080"   # device/controller communication

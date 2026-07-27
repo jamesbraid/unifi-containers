@@ -2,7 +2,7 @@ name: unifi-os release
 
 on:
   push:
-    tags: ["unifi-os-v[0-9]*"]
+    tags: ["unifi-os/*"]
 
 # GHCR pushes use the workflow token: GHCR does not honor GitHub App
 # installation tokens for user-owned packages ("installation not allowed
@@ -24,85 +24,102 @@ jobs:
           - arch: arm64
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
+    # Both matrix legs resolve these to the same strings, so which leg wins the
+    # write does not matter. The per-arch images are reached by their staging
+    # tags instead, which are derived from push_base and so need no plumbing.
     outputs:
-      version: ${{ steps.ver.outputs.version }}
-      digest_amd64: ${{ steps.digests.outputs.digest_amd64 }}
-      digest_arm64: ${{ steps.digests.outputs.digest_arm64 }}
-      sim_digest_amd64: ${{ steps.digests.outputs.sim_digest_amd64 }}
-      sim_digest_arm64: ${{ steps.digests.outputs.sim_digest_arm64 }}
-      seeded_digest_amd64: ${{ steps.digests.outputs.seeded_digest_amd64 }}
-      seeded_digest_arm64: ${{ steps.digests.outputs.seeded_digest_arm64 }}
+      publish: ${{ steps.ver.outputs.publish }}
+      push_base: ${{ steps.ver.outputs.push_base }}
+      push_sim: ${{ steps.ver.outputs.push_sim }}
+      push_seeded: ${{ steps.ver.outputs.push_seeded }}
+      globals: ${{ steps.ver.outputs.globals }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0   # the plan compares against every release tag
 
-      - name: Parse tag and check against pins
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Fails here, at the first step, when the tag disagrees with the pinned
+      # artifact — before anything is built, let alone pushed.
+      - name: Plan the release
         id: ver
-        run: |
-          version=${GITHUB_REF_NAME#unifi-os-v}   # 5.1.21-1 (with revision)
-          upstream=${version%-*}                  # 5.1.21
-          . ./unifi-os/pins.env
-          if [ "$UOS_VERSION" != "$upstream" ]; then
-            echo "git tag $GITHUB_REF_NAME (upstream $upstream) != pinned $UOS_VERSION"
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+        run: uv run -p 3.13 unifi-containers release-plan "$GITHUB_REF_NAME" --github >> "$GITHUB_OUTPUT"
+
+      # Nothing below runs for a superseded build. The push targets it would
+      # interpolate are blank by then, so all three variants would collapse onto
+      # one `staging--<arch>` tag and collide after the builds had already run.
+      - name: Refuse to publish a superseded build
+        if: steps.ver.outputs.publish != 'true'
+        run: echo "::notice::${GITHUB_REF_NAME} is not the newest build of its upstream version; nothing to publish"
 
       - name: Free disk space
+        if: steps.ver.outputs.publish == 'true'
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
 
       - name: Extract UOS base image (pinned + sha256-verified)
-        run: ./unifi-os/extract-uos.sh ${{ matrix.arch }}
+        if: steps.ver.outputs.publish == 'true'
+        run: uv run -p 3.13 unifi-containers extract-uos ${{ matrix.arch }}
 
+      # Root context for the base: the shared python package lives at src/ and
+      # COPY cannot reach outside its context. sim/seeded keep their small
+      # contexts — they inherit the package and PYTHONPATH from the base.
       - name: Build base, sim, and seeded images
+        if: steps.ver.outputs.publish == 'true'
         run: |
-          docker build --build-arg UOS_VERSION="${{ steps.ver.outputs.version }}" \
-            --build-arg REVISION="${GITHUB_SHA}" \
-            -t "$IMAGE:${{ steps.ver.outputs.version }}-${{ matrix.arch }}" unifi-os/
-          docker build --build-arg BASE_IMAGE="$IMAGE:${{ steps.ver.outputs.version }}-${{ matrix.arch }}" \
-            -t "$IMAGE:${{ steps.ver.outputs.version }}-sim-${{ matrix.arch }}" unifi-os/sim/
-          docker build --build-arg BASE_IMAGE="$IMAGE:${{ steps.ver.outputs.version }}-${{ matrix.arch }}" \
-            -t "$IMAGE:${{ steps.ver.outputs.version }}-seeded-${{ matrix.arch }}" unifi-os/seeded/
+          base="$IMAGE:staging-${{ steps.ver.outputs.push_base }}-${{ matrix.arch }}"
+          docker build -f unifi-os/Dockerfile \
+            --build-arg UOS_VERSION="${{ steps.ver.outputs.build }}" \
+            --build-arg REVISION="${GITHUB_SHA}" -t "$base" .
+          docker build --build-arg BASE_IMAGE="$base" \
+            -t "$IMAGE:staging-${{ steps.ver.outputs.push_sim }}-${{ matrix.arch }}" unifi-os/sim/
+          docker build --build-arg BASE_IMAGE="$base" \
+            -t "$IMAGE:staging-${{ steps.ver.outputs.push_seeded }}-${{ matrix.arch }}" unifi-os/seeded/
 
-      - name: Health gate both variants (native) — a broken image never publishes
+      - name: Shipped package imports on the image's own interpreter
+        if: steps.ver.outputs.publish == 'true'
         run: |
-          ./.github/scripts/run-uos.sh gate-sim "$IMAGE:${{ steps.ver.outputs.version }}-sim-${{ matrix.arch }}"
-          ./scripts/wait-healthy.py gate-sim 900
-          ./scripts/assert-uos-api-key.py gate-sim --expect-absent
-          docker rm -f gate-sim
-          ./.github/scripts/run-uos.sh gate-seeded "$IMAGE:${{ steps.ver.outputs.version }}-seeded-${{ matrix.arch }}"
-          ./scripts/wait-healthy.py gate-seeded 900
-          # The seeded variant's whole point is the X-API-KEY: if an upstream
-          # bump moved ULP's mint route, this fails here and the images never
-          # reach GHCR, so the sliding tags never move.
-          ./scripts/assert-uos-api-key.py gate-seeded
-          docker rm -f gate-seeded
+          docker run --rm --entrypoint /usr/bin/python3 \
+            "$IMAGE:staging-${{ steps.ver.outputs.push_base }}-${{ matrix.arch }}" \
+            -m unifi_runtime.selfcheck
+
+      # The suite boots each variant under the documented runtime contract and
+      # tears it down even when an assertion fails.
+      - name: Health gate all three variants (native) — a broken image never publishes
+        if: steps.ver.outputs.publish == 'true'
+        env:
+          UNIFI_TEST_UOS_IMAGE: ${{ env.IMAGE }}:staging-${{ steps.ver.outputs.push_base }}-${{ matrix.arch }}
+          UNIFI_TEST_UOS_SIM_IMAGE: ${{ env.IMAGE }}:staging-${{ steps.ver.outputs.push_sim }}-${{ matrix.arch }}
+          UNIFI_TEST_UOS_SEEDED_IMAGE: ${{ env.IMAGE }}:staging-${{ steps.ver.outputs.push_seeded }}-${{ matrix.arch }}
+        run: uv run -p 3.13 --extra test pytest tests/integration -m integration -k uos
 
       - name: Log in to GHCR
+        if: steps.ver.outputs.publish == 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Push per-arch images and capture digests
-        id: digests
+      - name: Push the per-arch staging images
+        if: steps.ver.outputs.publish == 'true'
         run: |
-          v=${{ steps.ver.outputs.version }}
-          a=${{ matrix.arch }}
-          base_digest=$(docker push "$IMAGE:$v-$a" | sed -n 's/.*digest: \(sha256:[0-9a-f]*\).*/\1/p')
-          sim_digest=$(docker push "$IMAGE:$v-sim-$a" | sed -n 's/.*digest: \(sha256:[0-9a-f]*\).*/\1/p')
-          seeded_digest=$(docker push "$IMAGE:$v-seeded-$a" | sed -n 's/.*digest: \(sha256:[0-9a-f]*\).*/\1/p')
-          echo "digest_$a=$base_digest" >> "$GITHUB_OUTPUT"
-          echo "sim_digest_$a=$sim_digest" >> "$GITHUB_OUTPUT"
-          echo "seeded_digest_$a=$seeded_digest" >> "$GITHUB_OUTPUT"
+          docker push "$IMAGE:staging-${{ steps.ver.outputs.push_base }}-${{ matrix.arch }}"
+          docker push "$IMAGE:staging-${{ steps.ver.outputs.push_sim }}-${{ matrix.arch }}"
+          docker push "$IMAGE:staging-${{ steps.ver.outputs.push_seeded }}-${{ matrix.arch }}"
 
   manifest:
     needs: build
+    if: needs.build.outputs.publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+
+      - uses: astral-sh/setup-uv@v5
         with:
-          fetch-depth: 0   # sliding-tags.sh needs every tag
+          enable-cache: true
 
       - name: Log in to GHCR
         uses: docker/login-action@v3
@@ -111,28 +128,35 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
+      # slide-tags points names at digests, so the stitched manifest-list digest
+      # has to come back out of the registry once each list exists.
       - name: Stitch multi-arch tags
         id: stitch
         run: |
-          v=${{ needs.build.outputs.version }}
-          docker buildx imagetools create -t "$IMAGE:$v" \
-            "$IMAGE@${{ needs.build.outputs.digest_amd64 }}" \
-            "$IMAGE@${{ needs.build.outputs.digest_arm64 }}"
-          docker buildx imagetools create -t "$IMAGE:$v-sim" \
-            "$IMAGE@${{ needs.build.outputs.sim_digest_amd64 }}" \
-            "$IMAGE@${{ needs.build.outputs.sim_digest_arm64 }}"
-          docker buildx imagetools create -t "$IMAGE:$v-seeded" \
-            "$IMAGE@${{ needs.build.outputs.seeded_digest_amd64 }}" \
-            "$IMAGE@${{ needs.build.outputs.seeded_digest_arm64 }}"
-          echo "base=$(docker buildx imagetools inspect "$IMAGE:$v" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')" >> "$GITHUB_OUTPUT"
-          echo "sim=$(docker buildx imagetools inspect "$IMAGE:$v-sim" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')" >> "$GITHUB_OUTPUT"
-          echo "seeded=$(docker buildx imagetools inspect "$IMAGE:$v-seeded" --format '{{json .Manifest}}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')" >> "$GITHUB_OUTPUT"
+          set -o pipefail
+          stitch() {   # stitch <variant> <tag>: create the list, print its digest
+            local digest
+            # >&2 because only the digest line may reach $GITHUB_OUTPUT.
+            docker buildx imagetools create -t "$IMAGE:$2" \
+              "$IMAGE:staging-$2-amd64" "$IMAGE:staging-$2-arm64" >&2
+            # An assignment, not an echo substitution: this has to fail the step
+            # rather than hand slide-tags an empty digest it would only skip.
+            digest=$(docker buildx imagetools inspect "$IMAGE:$2" \
+              --format '{{json .Manifest}}' \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')
+            echo "$1=$digest"
+          }
+          {
+            stitch base   "${{ needs.build.outputs.push_base }}"
+            stitch sim    "${{ needs.build.outputs.push_sim }}"
+            stitch seeded "${{ needs.build.outputs.push_seeded }}"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: Move sliding tags where this is the highest version
+      # Which tags move was decided by release-plan; this only applies it.
+      - name: Move the sliding tags
         run: |
-          ./.github/scripts/sliding-tags.sh "$IMAGE" \
-            "${{ needs.build.outputs.version }}" \
-            "${{ steps.stitch.outputs.base }}" \
-            "${{ steps.stitch.outputs.sim }}" \
-            unifi-os-v \
-            "${{ steps.stitch.outputs.seeded }}"
+          uv run -p 3.13 unifi-containers slide-tags --image "$IMAGE" \
+            --tags "${{ needs.build.outputs.globals }}" \
+            --base "${{ steps.stitch.outputs.base }}" \
+            --sim "${{ steps.stitch.outputs.sim }}" \
+            --seeded "${{ steps.stitch.outputs.seeded }}"
