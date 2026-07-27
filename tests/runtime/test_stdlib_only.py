@@ -33,11 +33,22 @@ LOCAL_ROOTS = {"unifi_runtime"}
 VENDORED_ROOTS = {"javaproperties"}
 
 
+#: The init hooks are python too, and are executed at container boot, but they
+#: are named for the hook runner and carry no extension — so an `*.py` glob
+#: walks straight past them. That blind spot has already produced one false
+#: negative here.
+SHIPPED_HOOKS = sorted(
+    [*REPO_ROOT.glob("network/**/demo-mode"), *REPO_ROOT.glob("unifi-os/**/demo-mode")]
+)
+
+
 def shipped_modules():
-    return sorted(SHIPPED.rglob("*.py"))
+    return sorted(SHIPPED.rglob("*.py")) + SHIPPED_HOOKS
 
 
 def is_vendored(path):
+    if SHIPPED not in path.parents:
+        return False
     return "_vendor" in path.relative_to(SHIPPED).parts
 
 
@@ -86,9 +97,7 @@ def test_there_is_something_to_check():
     assert len(shipped_modules()) >= 5
 
 
-@pytest.mark.parametrize(
-    "path", shipped_modules(), ids=lambda p: str(p.relative_to(SHIPPED.parent))
-)
+@pytest.mark.parametrize("path", shipped_modules(), ids=lambda p: str(p.relative_to(REPO_ROOT)))
 def test_shipped_module_imports_stdlib_only(path):
     allowed = LOCAL_ROOTS | (VENDORED_ROOTS if is_vendored(path) else set())
     roots = import_roots(ast.parse(path.read_text(), filename=str(path)))
@@ -124,7 +133,7 @@ def test_selfcheck_covers_every_shipped_module():
     missing = sorted(
         name
         for path in shipped_modules()
-        if not is_vendored(path) and path.name != "__init__.py"
+        if SHIPPED in path.parents and not is_vendored(path) and path.name != "__init__.py"
         for name in [module_name(path)]
         if name not in listed and name != "unifi_runtime.selfcheck"
     )

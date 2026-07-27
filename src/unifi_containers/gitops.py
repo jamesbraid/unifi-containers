@@ -27,7 +27,12 @@ def trust_workdir():
 def push_target(env=None):
     """Where to push; in CI the clone URL carries no auth, so a token comes with it.
 
-    Falls back to a named remote so the lanes are runnable outside Woodpecker.
+    Outside Woodpecker, set both FORGEJO_TOKEN and CI_REPO_CLONE_URL to an
+    https:// URL — that is the only combination that authenticates, because the
+    credential is a username/password pair. The GIT_REMOTE fallback resolves a
+    configured remote's URL but supplies no credentials, so it reaches a public
+    remote and nothing else; against an ssh:// remote libgit2 wants a key, which
+    nothing here offers.
     """
     environ = os.environ if env is None else env
     token = environ.get("FORGEJO_TOKEN")

@@ -5,6 +5,7 @@ execs /sbin/init, and a harness built to observe an exec tests the harness.
 """
 
 import os
+import shlex
 import shutil
 
 import pytest
@@ -242,14 +243,14 @@ def test_seed_owner_env_defaults(tmp_path):
     path = tmp_path / "uos-seed-owner.env"
     uos.write_seed_owner_env({"UOS_SEED_OWNER": "1"}, path=str(path))
     assert path.read_text() == (
-        "UOS_ADMIN_USER=admin\n"
-        "UOS_ADMIN_PASS=admin\n"
-        "UOS_COUNTRY=840\n"
-        "UOS_TIMEZONE=UTC\n"
-        "UOS_CONSOLE_NAME=unifi-os-sim\n"
-        "UOS_SEED_API_KEY=0\n"
-        "UOS_API_KEY_NAME=unifi-containers-seeded\n"
-        "UOS_API_KEY_FILE=/unifi/api-key\n"
+        "UOS_ADMIN_USER='admin'\n"
+        "UOS_ADMIN_PASS='admin'\n"
+        "UOS_COUNTRY='840'\n"
+        "UOS_TIMEZONE='UTC'\n"
+        "UOS_CONSOLE_NAME='unifi-os-sim'\n"
+        "UOS_SEED_API_KEY='0'\n"
+        "UOS_API_KEY_NAME='unifi-containers-seeded'\n"
+        "UOS_API_KEY_FILE='/unifi/api-key'\n"
     )
 
 
@@ -262,10 +263,10 @@ def test_seed_owner_env_takes_the_seeded_variant_settings():
             "UOS_API_KEY_FILE": "/unifi/api-key",
         }
     )
-    assert "UOS_ADMIN_USER=operator\n" in text
-    assert "UOS_ADMIN_PASS=hunter2\n" in text
-    assert "UOS_SEED_API_KEY=true\n" in text
-    assert "UOS_COUNTRY=840\n" in text  # untouched default
+    assert "UOS_ADMIN_USER='operator'\n" in text
+    assert "UOS_ADMIN_PASS='hunter2'\n" in text
+    assert "UOS_SEED_API_KEY='true'\n" in text
+    assert "UOS_COUNTRY='840'\n" in text  # untouched default
 
 
 # --- init hooks -------------------------------------------------------
@@ -332,3 +333,32 @@ def test_migration_preserves_ownership(tmp_path, monkeypatch):
         str(target / "mongodb"),
         str(target / "mongodb" / "mongodb.log"),
     }
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "admin",
+        "My Console",  # a space splits an unquoted value
+        "p@ss w'rd",  # a quote has to survive being quoted
+        "back\\slash",  # systemd treats an unquoted backslash as an escape
+        "$HOME",  # and would otherwise try to expand this
+        "trailing ",
+    ],
+)
+def test_a_seed_value_survives_the_environment_file(value):
+    """What the unit reads back must equal what the container was given.
+
+    The seed step gets these through the EnvironmentFile while the healthcheck
+    reads them straight from the environment, so anything systemd's shell-like
+    parser rewrites makes the two disagree — and that shows up as a container
+    that never goes healthy, not as an error.
+
+    shlex stands in for systemd's parser here: both implement POSIX-shell
+    quoting, and no systemd is available to a unit test.
+    """
+    text = uos.seed_owner_env({"UOS_CONSOLE_NAME": value})
+    line = next(ln for ln in text.splitlines() if ln.startswith("UOS_CONSOLE_NAME="))
+    parsed = shlex.split(line)
+    assert len(parsed) == 1, f"systemd would split this into {parsed}"
+    assert parsed[0] == f"UOS_CONSOLE_NAME={value}"
