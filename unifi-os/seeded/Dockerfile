@@ -19,26 +19,22 @@
 # on the Network App API use the -sim variant instead (the two setup paths are
 # mutually exclusive; see docs).
 #
+# Small context, unlike the base image: this layer turns two flags on, and
+# inherits PYTHONPATH and the shipped package from the base.
+#
 # Build against a published base tag:
 #   docker build --build-arg BASE_IMAGE=ghcr.io/jamesbraid/unifi-os-server:5.1.21 \
 #     -t unifi-os-server:5.1.21-seeded unifi-os/seeded/
 ARG BASE_IMAGE=ghcr.io/jamesbraid/unifi-os-server:latest
 FROM ${BASE_IMAGE}
 
-# Turn on the headless owner seed and the API-key mint the base entrypoint
-# ships (both inert by default).
+# The two flags that make this variant what it is. Kept as ENV so the seed unit
+# and the healthcheck read the same values, and `docker inspect` shows them.
 ENV UOS_SEED_OWNER=true \
-    UOS_ADMIN_USER=admin \
-    UOS_ADMIN_PASS=admin \
-    UOS_COUNTRY=840 \
-    UOS_TIMEZONE=UTC \
-    UOS_CONSOLE_NAME=unifi-os-sim \
-    UOS_SEED_API_KEY=true \
-    UOS_API_KEY_NAME=unifi-containers-seeded \
-    UOS_API_KEY_FILE=/unifi/api-key
+    UOS_SEED_API_KEY=true
 
-COPY docker-healthcheck-seeded.sh /usr/local/bin/docker-healthcheck-seeded.sh
-RUN chmod 755 /usr/local/bin/docker-healthcheck-seeded.sh
+# This variant always seeds, so the unit is enabled at build time.
+RUN systemctl enable uos-seed-owner.service
 
 HEALTHCHECK --interval=10s --timeout=8s --start-period=10m --retries=6 \
-  CMD /usr/local/bin/docker-healthcheck-seeded.sh || exit 1
+  CMD ["/usr/bin/python3", "-m", "unifi_runtime.healthcheck", "seeded"]
