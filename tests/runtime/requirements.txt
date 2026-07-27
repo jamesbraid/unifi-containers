@@ -1,0 +1,14 @@
+# The 3.9 lane's dependencies, kept out of pyproject.toml on purpose.
+#
+# `unifi_runtime` is never pip-installed: it reaches an image by COPY, onto
+# Debian's python 3.9.2, which has no pip and no venv. So this lane installs no
+# project — it runs pytest against src/ directly, which is how the code ships.
+# Keeping these here is what lets the distribution declare its real floor of
+# 3.13 without dragging the image's floor along with it.
+#
+# Every pin must support 3.9. pytest-httpserver 1.1.3 is the last release that
+# does; it is pinned exactly in pyproject.toml's `test` extra too, so both lanes
+# exercise the same behaviour.
+pytest>=8
+pytest-httpserver==1.1.3
+pytest-timeout>=2.4
