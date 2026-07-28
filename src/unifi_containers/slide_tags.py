@@ -10,14 +10,13 @@ import sys
 #: The unqualified names, which only the highest stable release carries.
 GLOBAL_TRACKS = {
     "latest": "base",
-    "rc": "base",
     "sim": "sim",
     "seeded": "seeded",
 }
 
-#: `10.4.57`, `10.4.57-sim`, `10.4.57-seeded`, `10.5.66-rc`. Build numbers are a
+#: `10.4.57`, `10.4.57-sim`, `10.4.57-seeded`. Build numbers are a
 #: git concept and never reach a registry, so a `-2` here is a mistake.
-VERSION_TAG_RE = re.compile(r"^\d+\.\d+\.\d+(?:-(?:rc|sim|seeded))?$")
+VERSION_TAG_RE = re.compile(r"^\d+\.\d+\.\d+(?:-(?:sim|seeded))?$")
 
 
 def variant_for(name):
@@ -27,7 +26,7 @@ def variant_for(name):
     if not VERSION_TAG_RE.match(name):
         raise ValueError(
             f"unknown sliding tag {name!r}; expected one of "
-            f"{', '.join(sorted(GLOBAL_TRACKS))}, or <version>[-rc|-sim|-seeded]"
+            f"{', '.join(sorted(GLOBAL_TRACKS))}, or <version>[-sim|-seeded]"
         )
     if name.endswith("-sim"):
         return "sim"

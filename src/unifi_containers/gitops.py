@@ -62,14 +62,6 @@ def signature(name, email):
     return pygit2.Signature(name, email)
 
 
-def current_branch(repo=None):
-    """The checked-out branch name, or None when HEAD is detached or unborn."""
-    repo = repo or repository()
-    if repo.head_is_unborn or repo.head_is_detached:
-        return None
-    return repo.head.shorthand
-
-
 def create_tag(repo, name, message, author):
     """Annotate HEAD with `name`. Raises rather than moving an existing tag."""
     if f"refs/tags/{name}" in repo.references:

@@ -19,7 +19,7 @@ on:
       - "tests/integration/**"
       - "tests/conftest.py"
   push:
-    branches: [main, rc]
+    branches: [main]
     paths:
       - "network/**"
       - "src/unifi_runtime/**"

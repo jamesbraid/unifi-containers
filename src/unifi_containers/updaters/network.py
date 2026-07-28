@@ -9,13 +9,13 @@ Adapted from jacobalberty/unifi-docker's unifi-updater.py (MIT).
 import json
 import re
 import sys
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 import feedparser
 from packaging.version import Version
 
-from unifi_containers.download import fetch, sha256_of_url, url_exists
+from unifi_containers.download import fetch, url_exists
 from unifi_containers.pins import PKGURL_RE, VERSION_IN_URL_RE
 
 FEED_URL = (
@@ -53,18 +53,6 @@ README_ROW_RE = re.compile(
 
 
 @dataclass
-class Release:
-    version: str  # bare X.Y.Z
-    link: str
-    is_rc: bool
-    is_beta: bool
-
-    @property
-    def tag_version(self) -> str:
-        return f"{self.version}-rc" if self.is_rc else self.version
-
-
-@dataclass
 class GaBuild:
     """The GA .deb as the firmware API describes it."""
 
@@ -72,26 +60,33 @@ class GaBuild:
     sha256: str
 
 
-def parse_feed(feed_bytes: bytes) -> list:
+def feed_links(feed_bytes: bytes) -> dict[str, str]:
+    """version -> release-notes URL, from the community feed.
+
+    The feed's only remaining job. It cannot say which versions are GA — every
+    entry looks the same, whatever channel it went to — so nothing is decided
+    here; the firmware API picks the version and this supplies the link for the
+    README, which is documentation and nothing more.
+    """
     parsed = feedparser.parse(feed_bytes)
-    if parsed.bozo and not parsed.entries:
-        raise RuntimeError(f"the release feed did not parse: {parsed.get('bozo_exception')}")
-    releases = []
+    links: dict[str, str] = {}
     for entry in parsed.entries:
-        title = (entry.get("title") or "").strip()
-        m = re.search(r"(\d+\.\d+\.\d+)", title)
-        if not m:
-            continue
-        lc = title.lower()
-        releases.append(
-            Release(
-                version=m.group(1),
-                link=(entry.get("link") or "").strip(),
-                is_rc=(" rc" in lc or "release candidate" in lc),
-                is_beta=("beta" in lc),
-            )
-        )
-    return releases
+        m = re.search(r"(\d+\.\d+\.\d+)", (entry.get("title") or ""))
+        if m:
+            links.setdefault(m.group(1), (entry.get("link") or "").strip())
+    return links
+
+
+def release_notes_link(version: str) -> str:
+    """The community page for `version`, or the releases index.
+
+    Best effort on purpose: the link is documentation, so a feed that is down,
+    reshaped or simply missing this version must not fail a bump.
+    """
+    try:
+        return feed_links(fetch(FEED_URL)).get(version) or FALLBACK_LINK
+    except Exception:  # noqa: BLE001 - a cosmetic link is never worth a failed bump
+        return FALLBACK_LINK
 
 
 def parse_ga_build(payload: bytes) -> GaBuild:
@@ -117,19 +112,6 @@ def parse_ga_build(payload: bytes) -> GaBuild:
         f"the firmware API listed no {GA_CHANNEL}/{GA_PLATFORM} build of unifi-controller, "
         f"so the GA version is unknown (channel/platform seen: {', '.join(seen) or 'none'})"
     )
-
-
-def select_release(releases, channel: str, ga_version: str):
-    """stable = the GA build the API names; rc = newest non-beta feed version above it."""
-    if channel == "stable":
-        rel = next((r for r in releases if r.version == ga_version), None)
-        if rel is None:
-            return Release(version=ga_version, link=FALLBACK_LINK, is_rc=False, is_beta=False)
-        return replace(rel, is_rc=False)
-    pool = [r for r in releases if not r.is_beta and Version(r.version) > Version(ga_version)]
-    if not pool:
-        return None
-    return replace(max(pool, key=lambda r: Version(r.version)), is_rc=True)
 
 
 def build_pkgurl(version: str) -> str:
@@ -164,31 +146,27 @@ def rewrite_readme(text: str, version: str, link: str) -> str:
     return text
 
 
-def bump(channel="stable", write=False, repo_root=Path(".")):
-    """Select a release and optionally rewrite the pins.
+def bump(write=False, repo_root=Path(".")):
+    """Pin the GA version the firmware API names, and optionally rewrite the pins.
 
-    Returns the tag version (`10.4.57`, or `10.5.66-rc`), or None when the pin is
-    already current. The lane driver reads that return value; nothing parses stdout.
+    Returns that version, or None when the pin is already current. The lane
+    driver reads the return value; nothing parses stdout.
     """
     dockerfile = repo_root / DOCKERFILE
     readme = repo_root / README
     _, _, current = read_pins(dockerfile.read_text())
 
     ga = parse_ga_build(fetch(FIRMWARE_API_URL))
-    rel = select_release(parse_feed(fetch(FEED_URL)), channel, ga.version)
-    if rel is None or Version(rel.version) <= Version(current):
+    if Version(ga.version) <= Version(current):
         return None
 
-    url = build_pkgurl(rel.version)
-    # The API describes GA and nothing else — there is no record for any RC — so
-    # only the stable lane gets its checksum for free. An RC still costs a
-    # ~130MB streaming hash, which is why the split is on the selected version
-    # rather than on the channel name.
-    sha = ga.sha256 if rel.version == ga.version else sha256_of_url(url)
+    url = build_pkgurl(ga.version)
     if write:
-        dockerfile.write_text(rewrite_dockerfile(dockerfile.read_text(), url, sha))
-        readme.write_text(rewrite_readme(readme.read_text(), rel.tag_version, rel.link))
-    return rel.tag_version
+        dockerfile.write_text(rewrite_dockerfile(dockerfile.read_text(), url, ga.sha256))
+        readme.write_text(
+            rewrite_readme(readme.read_text(), ga.version, release_notes_link(ga.version))
+        )
+    return ga.version
 
 
 def verify(repo_root=Path(".")):

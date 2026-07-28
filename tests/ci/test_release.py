@@ -10,28 +10,27 @@ import pytest
 from unifi_containers import release
 
 STABLE = "network/10.4.57-1"
-RC = "network/10.5.66-rc-1"
+RETIRED_RC = "network/10.5.66-rc-1"
 UOS = "unifi-os/5.1.21-3"
 
 
-def test_a_stable_tag_reads_left_to_right():
+def test_a_tag_reads_left_to_right():
     rel = release.parse(STABLE)
-    assert (rel.product, rel.upstream, rel.revision, rel.is_rc) == ("network", "10.4.57", 1, False)
+    assert (rel.product, rel.upstream, rel.revision) == ("network", "10.4.57", 1)
     assert rel.version == "10.4.57-1"
     assert rel.image == "ghcr.io/jamesbraid/unifi-network"
 
 
-def test_an_rc_tag_carries_a_build_number_like_everything_else():
-    # The old scheme had no revision on an RC, which is why an RC could not be
-    # rebuilt: ${version%-*} turned 10.5.66-rc into 10.5.66 and the shell's
-    # `case *-rc)` stopped matching once anything was appended.
-    rel = release.parse(RC)
-    assert (rel.upstream, rel.revision, rel.is_rc) == ("10.5.66", 1, True)
-    assert rel.version == "10.5.66-rc-1"
+def test_a_retired_rc_tag_is_not_a_release():
+    # This repo releases GA only, and no source states which upstream versions
+    # are candidates. Tags from when it tried are left in history, and must not
+    # register as build 1 of anything.
+    assert release.parse(RETIRED_RC) is None
+    assert release.releases_for([RETIRED_RC, STABLE], "network") == [release.parse(STABLE)]
 
 
 def test_the_git_tag_round_trips():
-    for tag in (STABLE, RC, UOS):
+    for tag in (STABLE, UOS):
         assert release.parse(tag).git_tag == tag
 
 
@@ -85,13 +84,10 @@ def test_a_newer_upstream_beats_more_builds_of_an_older_one():
     assert release.highest(tags, "network").upstream == "10.5.0"
 
 
-def test_an_rc_never_outranks_the_stable_release_it_precedes():
-    # Otherwise publishing an RC would drag `latest` onto a pre-release.
-    tags = ["network/10.5.66-rc-3", "network/10.5.66-1"]
-    assert release.highest(tags, "network").is_rc is False
-
-
-def test_highest_ignores_rcs_entirely_by_default():
+def test_a_retired_rc_tag_cannot_win_highest():
+    # It would otherwise drag `latest` onto a pre-release.
+    tags = ["network/10.5.66-rc-3", "network/10.4.57-1"]
+    assert release.highest(tags, "network").upstream == "10.4.57"
     assert release.highest(["network/10.9.9-rc-1"], "network") is None
 
 
@@ -114,12 +110,6 @@ def test_a_version_already_tagged_gets_the_next_build():
 def test_builds_of_a_different_version_do_not_advance_the_count():
     tags = ["network/10.4.57-7"]
     assert release.next_release(tags, "network", "10.5.0").revision == 1
-
-
-def test_rc_builds_are_counted_separately_from_stable():
-    tags = ["network/10.5.66-1", "network/10.5.66-2"]
-    assert release.next_release(tags, "network", "10.5.66", is_rc=True).revision == 1
-    assert release.next_release(tags, "network", "10.5.66").revision == 3
 
 
 def test_the_next_build_never_collides_with_an_existing_tag():
@@ -162,14 +152,6 @@ def test_build_ten_supersedes_build_nine():
 def test_builds_of_another_version_do_not_supersede_this_one():
     rel = release.parse("network/10.4.57-1")
     assert release.is_highest_build(["network/10.5.0-7"], rel) is True
-
-
-def test_stable_and_rc_builds_are_counted_on_separate_channels():
-    # 10.5.66-rc-4 exists; the first stable build of 10.5.66 is still newest.
-    stable = release.parse("network/10.5.66-1")
-    assert release.is_highest_build(["network/10.5.66-rc-4"], stable) is True
-    rc = release.parse("network/10.5.66-rc-1")
-    assert release.is_highest_build(["network/10.5.66-rc-4"], rc) is False
 
 
 def test_another_products_builds_are_invisible():
@@ -221,40 +203,6 @@ def test_an_older_build_publishes_nothing_at_all():
     assert release.sliding_tags(rel, False, True) == []
 
 
-def test_an_rc_carries_its_own_name_and_the_rc_pointer():
-    rel = release.parse(RC)
-    assert release.is_highest_stable([], rel) is False
-    # `rc` floats like `latest`, so it follows the top of the RC channel and the
-    # version-level name is all a lower one gets.
-    assert release.sliding_tags(rel, True, True) == ["10.5.66-rc", "rc"]
-    assert release.sliding_tags(rel, True, False) == ["10.5.66-rc"]
-
-
-def test_an_older_upstream_rc_does_not_drag_the_rc_pointer_back():
-    # is_highest_build only compares builds within one upstream version, so
-    # without a channel-level guard, releasing 10.5.60-rc after 10.5.66-rc had
-    # shipped repointed `rc` at the older candidate.
-    tags = ["network/10.5.60-rc-1", "network/10.5.66-rc-2"]
-    older = release.parse("network/10.5.60-rc-1")
-    newer = release.parse("network/10.5.66-rc-2")
-    assert release.is_top_of_channel(tags, older) is False
-    assert release.is_top_of_channel(tags, newer) is True
-    assert "rc" not in release.sliding_tags(older, True, release.is_top_of_channel(tags, older))
-    assert "rc" in release.sliding_tags(newer, True, release.is_top_of_channel(tags, newer))
-
-
-def test_an_older_rc_build_publishes_nothing():
-    rel = release.parse("network/10.5.66-rc-1")
-    assert release.sliding_tags(rel, False, False) == []
-
-
 def test_one_products_release_does_not_move_the_others_pointers():
     rel = release.parse(UOS)
     assert release.is_highest_stable(["network/99.9.9-1"], rel) is True
-
-
-def test_a_uos_release_candidate_is_not_a_release():
-    # UniFi OS ships no prerelease. The tag parses, so only the channel rule
-    # stops the release lane building sim/seeded with no tags to push them under.
-    assert release.has_rc_channel("network") is True
-    assert release.has_rc_channel("unifi-os") is False

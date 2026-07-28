@@ -7,7 +7,7 @@ secret.
 from dataclasses import dataclass
 from typing import Callable, Optional
 
-from unifi_containers import forge, gitops, pins
+from unifi_containers import forge, gitops
 from unifi_containers.updaters import network as network_updater
 from unifi_containers.updaters import uos as uos_updater
 
@@ -22,16 +22,10 @@ class Lane:
 
 LANES = {
     "stable": Lane(
-        lambda: network_updater.bump(channel="stable", write=True),
+        lambda: network_updater.bump(write=True),
         "network",
         ("network/Dockerfile", "README.md"),
         "main",
-    ),
-    "rc": Lane(
-        lambda: network_updater.bump(channel="rc", write=True),
-        "network",
-        ("network/Dockerfile", "README.md"),
-        "rc",
     ),
     "uos": Lane(
         lambda: uos_updater.bump(write=True),
@@ -45,8 +39,7 @@ LANES = {
 @dataclass(frozen=True)
 class Bump:
     lane: str
-    version: str  # 10.5.62-rc — what the tag will carry
-    semver: str  # 10.5.62 — what the deb URL and pins carry
+    version: str  # 10.4.57 — what the tag will carry
     prefix: str
     files: tuple[str, ...]
     base: str
@@ -60,27 +53,14 @@ def plan(lane_name, version):
         raise ValueError(f"unknown lane: {lane_name}")
     if version is None:
         return None
-    semver = version[: -len("-rc")] if version.endswith("-rc") else version
     return Bump(
         lane=lane_name,
         version=version,
-        semver=semver,
         prefix=lane.prefix,
         files=lane.files,
         base=lane.base,
         branch=f"bump/{lane.prefix}-{version}",
     )
-
-
-def reset_rc_branch(client, bump):
-    """Recreate the disposable rc branch from main; False to stand down."""
-    pinned = pins.pkgurl_version(client.raw_file("rc", "network/Dockerfile"))
-    if pinned == bump.semver:
-        print(f"rc lane already at {bump.semver}; nothing to do")
-        return False
-    client.delete_branch("rc")
-    client.create_branch("rc", "main")
-    return True
 
 
 def open_pull(client, bump):
@@ -103,9 +83,9 @@ def run_lane(lane):
     target = gitops.push_target()
 
     # Start from this lane's base, not from wherever the previous lane finished.
-    # The three lanes are consecutive steps in one workspace, so without this the
-    # rc and uos bumps are computed against — and committed on top of — the
-    # stable lane's bump, and the uos PR auto-merges that to main.
+    # The lanes are consecutive steps in one workspace, so without this the uos
+    # bump is computed against — and committed on top of — the network lane's
+    # bump, and its PR auto-merges that to main.
     gitops.reset_to_remote_branch(target.url, LANES[lane].base, token=target.token, repo=repo)
 
     version = LANES[lane].bump()
@@ -116,8 +96,6 @@ def run_lane(lane):
         return 0
 
     client = forge.Forge.from_env()
-    if bump.base == "rc" and not reset_rc_branch(client, bump):
-        return 0
 
     gitops.checkout_new_branch(repo, bump.branch)
     message = f"{bump.prefix}: bump to {bump.version}"
