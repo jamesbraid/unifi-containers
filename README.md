@@ -56,11 +56,23 @@ Git tags are product-scoped and carry the build number:
 `network/10.4.57-1`, `unifi-os/5.1.21-3`.
 
 Only GA upstream versions are built. Ubiquiti publishes release candidates too,
-but which versions those are is stated only in a badge on a client-rendered
-page — the community feed carries no channel field, and the firmware API these
-pins come from lists GA builds alone. Rather than guess, the updater takes the
-version the firmware API calls `release`. That trails the community
-announcement by up to a couple of weeks, which is the intended trade.
+and the community feed cannot tell you which is which — it carries no channel
+field at all, so a candidate and a GA release appear identically. The channel is
+stated in the firmware API, which is what the updater asks.
+
+That API publishes the same application under two product ids, and the
+difference matters:
+
+| product | artifact | says GA is |
+|---|---|---|
+| `unifi` | the app bundled into UniFi OS | current, and complete |
+| `unifi-controller` | the standalone `.deb` these images install | days to weeks behind, and skips versions |
+
+So the **version** comes from `unifi` and the **checksum** from
+`unifi-controller` whenever it has caught up to that version — otherwise the
+`.deb` is hashed. Reading the version from the `.deb` product instead would park
+the pin on a superseded release with nothing to say so: it has no 10.2.x record
+at all, though 10.2.105 was GA.
 
 The version comes from the pins, the build number from the tags. So a bump is
 automatic — the updater rewrites the pin, and CI notices the pinned version has

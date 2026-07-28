@@ -9,38 +9,50 @@ Adapted from jacobalberty/unifi-docker's unifi-updater.py (MIT).
 import json
 import re
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 
 import feedparser
 from packaging.version import Version
 
-from unifi_containers.download import fetch, url_exists
+from unifi_containers.download import fetch, sha256_of_url, url_exists
 from unifi_containers.pins import PKGURL_RE, VERSION_IN_URL_RE
 
 FEED_URL = (
     "https://community.ui.com/rss/releases/UniFi-Network-Application/"
     "e6712595-81bb-4829-8e42-9e2630fabcfe"
 )
-# Ubiquiti's firmware API is the GA authority, the same endpoint the UniFi OS
-# lane already asks. The community feed stopped marking channels in titles
-# (verified 2026-07-19: a 10.5.62 RC appears with a bare title while GA is
-# 10.4.57), so feed titles alone cannot tell stable from RC.
+# Ubiquiti's firmware API is the GA authority. The community feed cannot be: it
+# carries no channel field in any element, so a release candidate is
+# indistinguishable from GA there (verified 2026-07-27 — 10.5.66 and 10.5.62 are
+# candidates and 10.5.67 is GA, and all three appear with bare titles). The apt
+# repo cannot be either: three dists of one version each, rotating as lines
+# advance, and on 2026-07-26 `stable` was an empty 200 mid-promotion holding no
+# version at all. A cron run died on that.
 #
-# The apt repo held that job and could not keep it: it carries exactly three
-# dists (stable, oldstable, testing) of one version each, rotating as version
-# lines advance. On 2026-07-26 stable was an empty 200 mid-promotion to the 10.5
-# line and no dist held 10.4.57 — which is GA, and what this repo pins. A cron
-# run died on it.
+# The catch is that the same application is published under two product ids, and
+# only one of them answers "what is GA" promptly:
+#
+#   unifi             the app bundled into UniFi OS. Current and complete: its
+#                     release channel is exactly the versions the community
+#                     labels Official, candidates absent.
+#   unifi-controller  the standalone .deb, published separately and later. It is
+#                     what this repo pins, but it trails by days to weeks and
+#                     skips versions entirely — it has no 10.2.x at all, though
+#                     10.2.105 is GA.
+#
+# So the version comes from `unifi` and the checksum from `unifi-controller`
+# whenever it has caught up to that version. Reading the version from the .deb
+# product instead would leave the pin sitting on a superseded release with
+# nothing to say so.
 #
 # Stacking filters on this endpoint does NOT AND them: adding platform and
 # channel to the product filter answers with 7.2.97. Ask for the product and
 # pick the record here.
-FIRMWARE_API_URL = (
-    "https://fw-update.ubnt.com/api/firmware-latest?filter=eq~~product~~unifi-controller"
-)
+API = "https://fw-update.ubnt.com/api/firmware-latest?filter=eq~~product~~"
+GA_API_URL = API + "unifi"
+DEB_API_URL = API + "unifi-controller"
 GA_CHANNEL = "release"
-GA_PLATFORM = "debian"
+DEB_PLATFORM = "debian"
 FALLBACK_LINK = "https://community.ui.com/releases"
 DOCKERFILE = "network/Dockerfile"
 README = "README.md"
@@ -50,14 +62,6 @@ README_ROW_RE = re.compile(
     r"^\| `ghcr\.io/jamesbraid/unifi-network` \| \S+ \| \[Release notes\]\([^)]*\) \|$",
     re.MULTILINE,
 )
-
-
-@dataclass
-class GaBuild:
-    """The GA .deb as the firmware API describes it."""
-
-    version: str  # bare X.Y.Z
-    sha256: str
 
 
 def feed_links(feed_bytes: bytes) -> dict[str, str]:
@@ -89,29 +93,46 @@ def release_notes_link(version: str) -> str:
         return FALLBACK_LINK
 
 
-def parse_ga_build(payload: bytes) -> GaBuild:
-    """The GA .deb from the firmware API: the version everyone gets, and its sha256.
+def _version_of(entry) -> str:
+    """X.Y.Z from a firmware record's own fields, rather than parsing its version string."""
+    return f"{entry['version_major']}.{entry['version_minor']}.{entry['version_patch']}"
 
-    Its checksum is the one this repo pins: the API serves the artifact from
-    fw-download.ubnt.com while the pin names dl.ui.com, and the two are
+
+def parse_ga_version(payload: bytes) -> str:
+    """The newest GA version of the bundled application.
+
+    This is the answer to "what is GA", and it is current: the community labels
+    these Official, and release candidates never appear in this channel.
+    """
+    firmware = json.loads(payload).get("_embedded", {}).get("firmware", [])
+    versions = {_version_of(e) for e in firmware if e.get("channel") == GA_CHANNEL}
+    if not versions:
+        seen = sorted({str(e.get("channel")) for e in firmware})
+        raise RuntimeError(
+            f"the firmware API listed no {GA_CHANNEL} build of the bundled application, "
+            f"so the GA version is unknown (channels seen: {', '.join(seen) or 'none'})"
+        )
+    return max(versions, key=Version)
+
+
+def parse_deb_sha256(payload: bytes, version: str):
+    """The published sha256 of the standalone .deb for `version`, or None.
+
+    None is an ordinary answer, not a failure: this product trails the bundled
+    one and skips versions outright, so the checksum simply is not always there
+    to be had. The caller hashes the artifact instead.
+
+    When it is there it is the checksum this repo pins — the API serves the file
+    from fw-download.ubnt.com while the pin names dl.ui.com, and the two are
     byte-identical (verified 2026-07-26 against the checked-in PKGSHA256).
     """
     firmware = json.loads(payload).get("_embedded", {}).get("firmware", [])
     for entry in firmware:
-        if entry.get("channel") == GA_CHANNEL and entry.get("platform") == GA_PLATFORM:
-            major, minor, patch = (
-                entry["version_major"],
-                entry["version_minor"],
-                entry["version_patch"],
-            )
-            return GaBuild(f"{major}.{minor}.{patch}", entry["sha256_checksum"])
-    # Not "no update available" — the GA record itself is missing, so say which
-    # records did come back rather than leaving a lane to guess.
-    seen = sorted({f"{e.get('channel')}/{e.get('platform')}" for e in firmware})
-    raise RuntimeError(
-        f"the firmware API listed no {GA_CHANNEL}/{GA_PLATFORM} build of unifi-controller, "
-        f"so the GA version is unknown (channel/platform seen: {', '.join(seen) or 'none'})"
-    )
+        if entry.get("channel") != GA_CHANNEL or entry.get("platform") != DEB_PLATFORM:
+            continue
+        if _version_of(entry) == version:
+            return entry["sha256_checksum"]
+    return None
 
 
 def build_pkgurl(version: str) -> str:
@@ -156,17 +177,18 @@ def bump(write=False, repo_root=Path(".")):
     readme = repo_root / README
     _, _, current = read_pins(dockerfile.read_text())
 
-    ga = parse_ga_build(fetch(FIRMWARE_API_URL))
-    if Version(ga.version) <= Version(current):
+    version = parse_ga_version(fetch(GA_API_URL))
+    if Version(version) <= Version(current):
         return None
 
-    url = build_pkgurl(ga.version)
+    url = build_pkgurl(version)
+    # Free when the .deb product has caught up to this version, which it usually
+    # has; a ~130MB stream when it has not, or never will.
+    sha = parse_deb_sha256(fetch(DEB_API_URL), version) or sha256_of_url(url)
     if write:
-        dockerfile.write_text(rewrite_dockerfile(dockerfile.read_text(), url, ga.sha256))
-        readme.write_text(
-            rewrite_readme(readme.read_text(), ga.version, release_notes_link(ga.version))
-        )
-    return ga.version
+        dockerfile.write_text(rewrite_dockerfile(dockerfile.read_text(), url, sha))
+        readme.write_text(rewrite_readme(readme.read_text(), version, release_notes_link(version)))
+    return version
 
 
 def verify(repo_root=Path(".")):
