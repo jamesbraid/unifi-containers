@@ -5,7 +5,7 @@ import pytest
 from unifi_containers.updaters import network as updater
 
 # Real-world shape (verified 2026-07-19): feed titles carry NO channel
-# markers — RCs appear with bare version titles. Only the apt repo tells
+# markers — RCs appear with bare version titles. Only the firmware API tells
 # stable from RC.
 FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"><channel>
@@ -24,12 +24,32 @@ FEED = b"""<?xml version="1.0" encoding="UTF-8"?>
 </channel></rss>
 """
 
-APT_PACKAGES = """Package: unifi
-Architecture: all
-Version: 10.4.57-34628-1
-Depends: java17-runtime-headless
-Filename: pool/ubiquiti/u/unifi/unifi_10.4.57-34628-1_all.deb
-"""
+GA_SHA256 = "fc378cf8cd2bec3d334bf7b72eabfcd1861e5fae67b9c16735471132105b2072"
+
+# Real-world shape (verified 2026-07-27): one record per platform on the
+# release channel, plus a long-stale beta-public one. Only release+debian
+# describes the .deb this repo pins; the decoys are here so a broken filter
+# fails the test rather than the cron run.
+FIRMWARE_API = b"""{"_embedded": {"firmware": [
+  {"channel": "beta-public", "platform": "document",
+   "version": "v5.11.10+atag-5.11.10-12337",
+   "version_major": 5, "version_minor": 11, "version_patch": 10,
+   "sha256_checksum": "1791685039ea795970bcc7a61eec854058e3e6fc13c52770e31e20f3beb622eb"},
+  {"channel": "release", "platform": "windows",
+   "version": "v10.4.57+atag-10.4.57-34628",
+   "version_major": 10, "version_minor": 4, "version_patch": 57,
+   "sha256_checksum": "877458ef776a8dbcf2b605e63b3bd69b7f1cc84c8069b650ce97ee619a30cfcb"},
+  {"channel": "release", "platform": "debian",
+   "version": "v10.4.57+atag-10.4.57-34628",
+   "version_major": 10, "version_minor": 4, "version_patch": 57,
+   "md5": "68e0494402fd99b319d0d6573fdb80a3", "file_size": 130327194,
+   "sha256_checksum": "fc378cf8cd2bec3d334bf7b72eabfcd1861e5fae67b9c16735471132105b2072",
+   "_links": {"data": {"href": "https://fw-download.ubnt.com/data/unifi-controller/x.deb"}}},
+  {"channel": "release", "platform": "macos",
+   "version": "v10.4.57+atag-10.4.57-34628",
+   "version_major": 10, "version_minor": 4, "version_patch": 57,
+   "sha256_checksum": "9d6a698ce10643f9fb27c6ca29af346b0791179fba86def41498943162d686ca"}
+]}}"""
 
 DOCKERFILE = """FROM ubuntu:20.04
 ARG PKGURL=https://dl.ui.com/unifi/10.0.162/unifi_sysvinit_all.deb
@@ -49,28 +69,39 @@ def test_parse_feed_versions():
     assert [r.is_beta for r in rels] == [False, False, False, True, False]
 
 
-def test_parse_apt_stable():
-    assert updater.parse_apt_stable(APT_PACKAGES) == "10.4.57"
+def test_parse_ga_build_takes_the_release_debian_record():
+    ga = updater.parse_ga_build(FIRMWARE_API)
+    assert ga.version == "10.4.57"
+    assert ga.sha256 == GA_SHA256
 
 
-def test_parse_apt_stable_raises_without_unifi():
-    with pytest.raises(RuntimeError):
-        updater.parse_apt_stable("Package: other\nVersion: 1.0-1\n")
+def test_parse_ga_build_raises_when_the_debian_record_is_absent():
+    # An API that answers with everything except the .deb is not "no update
+    # available", and the error has to say so — the apt index this replaced
+    # went empty and reported itself as a missing package.
+    payload = FIRMWARE_API.replace(b'"platform": "debian"', b'"platform": "unix"')
+    with pytest.raises(RuntimeError, match=r"no release/debian build"):
+        updater.parse_ga_build(payload)
 
 
-def test_select_stable_follows_apt_not_newest_feed_entry():
+def test_parse_ga_build_names_what_did_come_back():
+    with pytest.raises(RuntimeError, match=r"seen: none"):
+        updater.parse_ga_build(b'{"_embedded": {"firmware": []}}')
+
+
+def test_select_stable_follows_the_api_not_the_newest_feed_entry():
     rel = updater.select_release(updater.parse_feed(FEED), "stable", "10.4.57")
     assert rel.version == "10.4.57" and not rel.is_rc
     assert rel.link == "https://community.ui.com/releases/stable-10-4-57"
 
 
-def test_select_stable_synthesizes_when_apt_version_not_in_feed():
+def test_select_stable_synthesizes_when_the_ga_version_is_not_in_the_feed():
     rel = updater.select_release(updater.parse_feed(FEED), "stable", "10.4.99")
     assert rel.version == "10.4.99" and not rel.is_rc
     assert rel.link == updater.FALLBACK_LINK
 
 
-def test_select_rc_newest_above_apt_stable_skipping_beta():
+def test_select_rc_newest_above_ga_skipping_beta():
     rel = updater.select_release(updater.parse_feed(FEED), "rc", "10.4.57")
     assert rel.version == "10.5.62" and rel.is_rc
     assert rel.tag_version == "10.5.62-rc"
@@ -128,3 +159,55 @@ def test_rewrite_readme_row():
 def test_rewrite_readme_raises_without_row():
     with pytest.raises(RuntimeError):
         updater.rewrite_readme("# empty\n", "1.2.3", "x")
+
+
+RC_SHA256 = "c" * 64
+
+
+@pytest.fixture
+def repo(tmp_path):
+    (tmp_path / "network").mkdir()
+    (tmp_path / updater.DOCKERFILE).write_text(DOCKERFILE)
+    (tmp_path / updater.README).write_text(README)
+    return tmp_path
+
+
+@pytest.fixture
+def hashed(monkeypatch):
+    """Serve both feeds offline; record every URL the updater chose to hash."""
+    urls = []
+
+    def fake_fetch(url):
+        if url == updater.FIRMWARE_API_URL:
+            return FIRMWARE_API
+        if url == updater.FEED_URL:
+            return FEED
+        raise AssertionError(f"unexpected fetch: {url}")
+
+    def fake_sha256_of_url(url):
+        urls.append(url)
+        return RC_SHA256
+
+    monkeypatch.setattr(updater, "fetch", fake_fetch)
+    monkeypatch.setattr(updater, "sha256_of_url", fake_sha256_of_url)
+    return urls
+
+
+def test_bump_stable_takes_the_checksum_from_the_api(repo, hashed):
+    assert updater.bump(channel="stable", write=True, repo_root=repo) == "10.4.57"
+    _, sha, version = updater.read_pins((repo / updater.DOCKERFILE).read_text())
+    assert version == "10.4.57"
+    assert sha == GA_SHA256
+    # The whole point of the API record: no 130MB stream per cron run.
+    assert hashed == []
+
+
+def test_bump_rc_hashes_the_deb_rather_than_reusing_the_ga_checksum(repo, hashed):
+    assert updater.bump(channel="rc", write=True, repo_root=repo) == "10.5.62-rc"
+    url, sha, version = updater.read_pins((repo / updater.DOCKERFILE).read_text())
+    assert version == "10.5.62"
+    # No API record exists for an RC, so a GA checksum here would pin a build
+    # that cannot be downloaded.
+    assert sha == RC_SHA256
+    assert sha != GA_SHA256
+    assert hashed == [url]

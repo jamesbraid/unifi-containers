@@ -1,17 +1,18 @@
 """Discover UniFi Network Application releases and update the pinned build.
 
-Reads the release RSS feed, picks the newest release on a channel, computes the
-.deb's sha256, and rewrites the pins in network/Dockerfile plus the README row.
+Takes the GA version and its checksum from Ubiquiti's firmware API, reads the
+release RSS feed for RC discovery and release-notes links, and rewrites the pins
+in network/Dockerfile plus the README row.
 Adapted from jacobalberty/unifi-docker's unifi-updater.py (MIT).
 """
 
+import json
 import re
 import sys
 from dataclasses import dataclass, replace
 from pathlib import Path
 
 import feedparser
-from debian.deb822 import Packages
 from packaging.version import Version
 
 from unifi_containers.download import fetch, sha256_of_url, url_exists
@@ -21,11 +22,25 @@ FEED_URL = (
     "https://community.ui.com/rss/releases/UniFi-Network-Application/"
     "e6712595-81bb-4829-8e42-9e2630fabcfe"
 )
-# The Ubiquiti apt repo's stable dist is the GA authority. The community
-# feed stopped marking channels in titles (verified 2026-07-19: 10.5.62 RC
-# appears with a bare title while apt stable ships 10.4.57), so feed
-# titles alone cannot distinguish stable from RC.
-APT_PACKAGES_URL = "https://dl.ui.com/unifi/debian/dists/stable/ubiquiti/binary-amd64/Packages"
+# Ubiquiti's firmware API is the GA authority, the same endpoint the UniFi OS
+# lane already asks. The community feed stopped marking channels in titles
+# (verified 2026-07-19: a 10.5.62 RC appears with a bare title while GA is
+# 10.4.57), so feed titles alone cannot tell stable from RC.
+#
+# The apt repo held that job and could not keep it: it carries exactly three
+# dists (stable, oldstable, testing) of one version each, rotating as version
+# lines advance. On 2026-07-26 stable was an empty 200 mid-promotion to the 10.5
+# line and no dist held 10.4.57 — which is GA, and what this repo pins. A cron
+# run died on it.
+#
+# Stacking filters on this endpoint does NOT AND them: adding platform and
+# channel to the product filter answers with 7.2.97. Ask for the product and
+# pick the record here.
+FIRMWARE_API_URL = (
+    "https://fw-update.ubnt.com/api/firmware-latest?filter=eq~~product~~unifi-controller"
+)
+GA_CHANNEL = "release"
+GA_PLATFORM = "debian"
 FALLBACK_LINK = "https://community.ui.com/releases"
 DOCKERFILE = "network/Dockerfile"
 README = "README.md"
@@ -47,6 +62,14 @@ class Release:
     @property
     def tag_version(self) -> str:
         return f"{self.version}-rc" if self.is_rc else self.version
+
+
+@dataclass
+class GaBuild:
+    """The GA .deb as the firmware API describes it."""
+
+    version: str  # bare X.Y.Z
+    sha256: str
 
 
 def parse_feed(feed_bytes: bytes) -> list:
@@ -71,22 +94,39 @@ def parse_feed(feed_bytes: bytes) -> list:
     return releases
 
 
-def parse_apt_stable(packages_text: str) -> str:
-    """Version of the `unifi` package in the apt stable dist (GA truth)."""
-    for paragraph in Packages.iter_paragraphs(packages_text, use_apt_pkg=False):
-        if paragraph.get("Package") == "unifi":
-            return paragraph["Version"].split("-")[0]
-    raise RuntimeError("unifi package not found in apt Packages index")
+def parse_ga_build(payload: bytes) -> GaBuild:
+    """The GA .deb from the firmware API: the version everyone gets, and its sha256.
+
+    Its checksum is the one this repo pins: the API serves the artifact from
+    fw-download.ubnt.com while the pin names dl.ui.com, and the two are
+    byte-identical (verified 2026-07-26 against the checked-in PKGSHA256).
+    """
+    firmware = json.loads(payload).get("_embedded", {}).get("firmware", [])
+    for entry in firmware:
+        if entry.get("channel") == GA_CHANNEL and entry.get("platform") == GA_PLATFORM:
+            major, minor, patch = (
+                entry["version_major"],
+                entry["version_minor"],
+                entry["version_patch"],
+            )
+            return GaBuild(f"{major}.{minor}.{patch}", entry["sha256_checksum"])
+    # Not "no update available" — the GA record itself is missing, so say which
+    # records did come back rather than leaving a lane to guess.
+    seen = sorted({f"{e.get('channel')}/{e.get('platform')}" for e in firmware})
+    raise RuntimeError(
+        f"the firmware API listed no {GA_CHANNEL}/{GA_PLATFORM} build of unifi-controller, "
+        f"so the GA version is unknown (channel/platform seen: {', '.join(seen) or 'none'})"
+    )
 
 
-def select_release(releases, channel: str, apt_stable: str):
-    """stable = whatever the apt repo ships; rc = newest non-beta feed version above it."""
+def select_release(releases, channel: str, ga_version: str):
+    """stable = the GA build the API names; rc = newest non-beta feed version above it."""
     if channel == "stable":
-        rel = next((r for r in releases if r.version == apt_stable), None)
+        rel = next((r for r in releases if r.version == ga_version), None)
         if rel is None:
-            return Release(version=apt_stable, link=FALLBACK_LINK, is_rc=False, is_beta=False)
+            return Release(version=ga_version, link=FALLBACK_LINK, is_rc=False, is_beta=False)
         return replace(rel, is_rc=False)
-    pool = [r for r in releases if not r.is_beta and Version(r.version) > Version(apt_stable)]
+    pool = [r for r in releases if not r.is_beta and Version(r.version) > Version(ga_version)]
     if not pool:
         return None
     return replace(max(pool, key=lambda r: Version(r.version)), is_rc=True)
@@ -134,13 +174,17 @@ def bump(channel="stable", write=False, repo_root=Path(".")):
     readme = repo_root / README
     _, _, current = read_pins(dockerfile.read_text())
 
-    apt_stable = parse_apt_stable(fetch(APT_PACKAGES_URL).decode())
-    rel = select_release(parse_feed(fetch(FEED_URL)), channel, apt_stable)
+    ga = parse_ga_build(fetch(FIRMWARE_API_URL))
+    rel = select_release(parse_feed(fetch(FEED_URL)), channel, ga.version)
     if rel is None or Version(rel.version) <= Version(current):
         return None
 
     url = build_pkgurl(rel.version)
-    sha = sha256_of_url(url)
+    # The API describes GA and nothing else — there is no record for any RC — so
+    # only the stable lane gets its checksum for free. An RC still costs a
+    # ~130MB streaming hash, which is why the split is on the selected version
+    # rather than on the channel name.
+    sha = ga.sha256 if rel.version == ga.version else sha256_of_url(url)
     if write:
         dockerfile.write_text(rewrite_dockerfile(dockerfile.read_text(), url, sha))
         readme.write_text(rewrite_readme(readme.read_text(), rel.tag_version, rel.link))
