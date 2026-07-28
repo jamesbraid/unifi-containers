@@ -215,9 +215,25 @@ UNIT_FLAGS = (
 SEED_OWNER_ENV_PATH = "/run/uos-seed-owner.env"
 
 
+def _quote(value):
+    """Quote `value` so systemd hands the unit back the string we were given.
+
+    systemd parses an EnvironmentFile shell-like: unquoted whitespace splits,
+    and backslashes, quotes and `$` are all significant. The healthcheck reads
+    the same settings straight from the container's environment, with no such
+    processing, so anything systemd rewrites makes the two disagree about a
+    password or a console name — and a disagreement there is a container that
+    never goes healthy rather than one that fails.
+
+    Single quotes, because systemd treats their contents literally. A value
+    containing one is closed out and re-opened, the way a shell does it.
+    """
+    return "'" + value.replace("'", "'\\''") + "'"
+
+
 def seed_owner_env(env):
     """Resolve the seed settings into EnvironmentFile text."""
-    return "".join(f"{key}={setting(key, env)}\n" for key in SEED_DEFAULTS)
+    return "".join(f"{key}={_quote(setting(key, env))}\n" for key in SEED_DEFAULTS)
 
 
 def write_seed_owner_env(env, path=SEED_OWNER_ENV_PATH):
