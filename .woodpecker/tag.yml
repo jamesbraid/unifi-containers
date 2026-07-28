@@ -3,7 +3,7 @@
 # nothing is due. Rebuilds stay deliberate and manual.
 when:
   - event: push
-    branch: [main, rc]
+    branch: [main]
 
 steps:
   cut-release:

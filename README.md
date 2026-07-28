@@ -33,15 +33,13 @@ Podman, Colima, Kubernetes.
 | Base | `X.Y.Z`, `latest` |
 | Simulation | `X.Y.Z-sim`, `sim` |
 | Seeded | `X.Y.Z-seeded`, `seeded` |
-| Release candidate | `X.Y.Z-rc`, `rc` (base only) |
 
 `X.Y.Z` is the upstream version. Build numbers are a git concept and never
 appear as an image tag: `X.Y.Z-sim` is the current build of that upstream
 version, and it moves when we rebuild the image without an upstream change — a
 Dockerfile or healthcheck fix. `latest` / `sim` / `seeded` follow the *highest*
 stable upstream version, not the most recent release, so rebuilding an older
-version does not drag them backwards; `rc` follows the newest release
-candidate.
+version does not drag them backwards.
 
 **For something that never moves, pin the digest** (`image@sha256:…`). Every
 other name slides. `docker inspect` reports what you actually have in
@@ -52,12 +50,17 @@ The consequence of everything sliding: a superseded build ends up untagged and
 becomes garbage-collectable, so rolling back means cutting a new build rather
 than repointing at an old one.
 
-An RC release only ever moves `X.Y.Z-rc` and `rc`, never `latest`.
-
 ### Cutting a release
 
 Git tags are product-scoped and carry the build number:
-`network/10.4.57-1`, `unifi-os/5.1.21-3`, `network/10.5.66-rc-1`.
+`network/10.4.57-1`, `unifi-os/5.1.21-3`.
+
+Only GA upstream versions are built. Ubiquiti publishes release candidates too,
+but which versions those are is stated only in a badge on a client-rendered
+page — the community feed carries no channel field, and the firmware API these
+pins come from lists GA builds alone. Rather than guess, the updater takes the
+version the firmware API calls `release`. That trails the community
+announcement by up to a couple of weeks, which is the intended trade.
 
 The version comes from the pins, the build number from the tags. So a bump is
 automatic — the updater rewrites the pin, and CI notices the pinned version has

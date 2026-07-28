@@ -1,7 +1,7 @@
 when:
   - event: pull_request
   - event: push
-    branch: [main, rc]
+    branch: [main]
   - event: manual
 
 # Two interpreters because the two packages carry different obligations.

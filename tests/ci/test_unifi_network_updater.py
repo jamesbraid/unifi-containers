@@ -63,10 +63,28 @@ README = """# unifi-containers
 """
 
 
-def test_parse_feed_versions():
-    rels = updater.parse_feed(FEED)
-    assert [r.version for r in rels] == ["10.5.62", "10.5.54", "10.4.57", "10.6.1", "10.3.58"]
-    assert [r.is_beta for r in rels] == [False, False, False, True, False]
+def test_feed_links_maps_versions_to_release_notes():
+    links = updater.feed_links(FEED)
+    assert links["10.4.57"] == "https://community.ui.com/releases/stable-10-4-57"
+
+
+def test_the_release_notes_link_is_never_worth_failing_a_bump(monkeypatch):
+    """The feed is documentation now — the version comes from the firmware API.
+
+    It carries no channel field, so it cannot say which versions are GA; all it
+    still supplies is the README's deep link. A feed that is down or reshaped
+    must therefore degrade to the index page, not stop the pin advancing.
+    """
+    monkeypatch.setattr(updater, "fetch", lambda _url: FEED)
+    assert updater.release_notes_link("10.4.57").endswith("stable-10-4-57")
+    # absent from the feed
+    assert updater.release_notes_link("11.0.0") == updater.FALLBACK_LINK
+
+    def explode(_url):
+        raise RuntimeError("feed is down")
+
+    monkeypatch.setattr(updater, "fetch", explode)
+    assert updater.release_notes_link("10.4.57") == updater.FALLBACK_LINK
 
 
 def test_parse_ga_build_takes_the_release_debian_record():
@@ -87,42 +105,6 @@ def test_parse_ga_build_raises_when_the_debian_record_is_absent():
 def test_parse_ga_build_names_what_did_come_back():
     with pytest.raises(RuntimeError, match=r"seen: none"):
         updater.parse_ga_build(b'{"_embedded": {"firmware": []}}')
-
-
-def test_select_stable_follows_the_api_not_the_newest_feed_entry():
-    rel = updater.select_release(updater.parse_feed(FEED), "stable", "10.4.57")
-    assert rel.version == "10.4.57" and not rel.is_rc
-    assert rel.link == "https://community.ui.com/releases/stable-10-4-57"
-
-
-def test_select_stable_synthesizes_when_the_ga_version_is_not_in_the_feed():
-    rel = updater.select_release(updater.parse_feed(FEED), "stable", "10.4.99")
-    assert rel.version == "10.4.99" and not rel.is_rc
-    assert rel.link == updater.FALLBACK_LINK
-
-
-def test_select_rc_newest_above_ga_skipping_beta():
-    rel = updater.select_release(updater.parse_feed(FEED), "rc", "10.4.57")
-    assert rel.version == "10.5.62" and rel.is_rc
-    assert rel.tag_version == "10.5.62-rc"
-
-
-def test_select_rc_none_when_feed_has_nothing_newer():
-    rel = updater.select_release(updater.parse_feed(FEED), "rc", "10.5.62")
-    assert rel is None
-
-
-def test_select_rc_compares_versions_numerically():
-    # 10.10.x beats 10.9.x, which string ordering gets backwards.
-    feed = FEED.replace(b"10.5.62", b"10.10.2").replace(b"10.5.54", b"10.9.5")
-    rel = updater.select_release(updater.parse_feed(feed), "rc", "10.4.57")
-    assert rel.version == "10.10.2"
-
-
-def test_a_feed_that_does_not_parse_fails_loudly():
-    # Reporting "no rc release" for a broken feed would silently stop the lane.
-    with pytest.raises(RuntimeError, match="did not parse"):
-        updater.parse_feed(b"this is not a feed at all")
 
 
 def test_read_pins():
@@ -173,9 +155,9 @@ def repo(tmp_path):
 
 
 @pytest.fixture
-def hashed(monkeypatch):
-    """Serve both feeds offline; record every URL the updater chose to hash."""
-    urls = []
+def offline(monkeypatch):
+    """Serve both sources offline; record anything the updater chose to hash."""
+    hashed = []
 
     def fake_fetch(url):
         if url == updater.FIRMWARE_API_URL:
@@ -184,30 +166,29 @@ def hashed(monkeypatch):
             return FEED
         raise AssertionError(f"unexpected fetch: {url}")
 
-    def fake_sha256_of_url(url):
-        urls.append(url)
-        return RC_SHA256
-
     monkeypatch.setattr(updater, "fetch", fake_fetch)
-    monkeypatch.setattr(updater, "sha256_of_url", fake_sha256_of_url)
-    return urls
+    monkeypatch.setattr(
+        updater, "sha256_of_url", lambda url: hashed.append(url) or RC_SHA256, raising=False
+    )
+    return hashed
 
 
-def test_bump_stable_takes_the_checksum_from_the_api(repo, hashed):
-    assert updater.bump(channel="stable", write=True, repo_root=repo) == "10.4.57"
-    _, sha, version = updater.read_pins((repo / updater.DOCKERFILE).read_text())
+def test_bump_pins_the_ga_version_and_takes_its_checksum_from_the_api(repo, offline):
+    assert updater.bump(write=True, repo_root=repo) == "10.4.57"
+    url, sha, version = updater.read_pins((repo / updater.DOCKERFILE).read_text())
     assert version == "10.4.57"
     assert sha == GA_SHA256
-    # The whole point of the API record: no 130MB stream per cron run.
-    assert hashed == []
+    # The whole point of the API record: no ~130MB stream per cron run.
+    assert offline == []
+    # 10.5.62 is newer in the feed, and is deliberately NOT chosen: the feed
+    # cannot say whether it is GA, and this repo releases GA only.
+    assert "10.5.62" not in url
 
 
-def test_bump_rc_hashes_the_deb_rather_than_reusing_the_ga_checksum(repo, hashed):
-    assert updater.bump(channel="rc", write=True, repo_root=repo) == "10.5.62-rc"
-    url, sha, version = updater.read_pins((repo / updater.DOCKERFILE).read_text())
-    assert version == "10.5.62"
-    # No API record exists for an RC, so a GA checksum here would pin a build
-    # that cannot be downloaded.
-    assert sha == RC_SHA256
-    assert sha != GA_SHA256
-    assert hashed == [url]
+def test_bump_is_none_when_the_pin_already_holds_the_ga_version(repo, offline):
+    (repo / updater.DOCKERFILE).write_text(
+        DOCKERFILE.replace("10.0.162", "10.4.57").replace(
+            "PKGSHA256=" + "0" * 64, "PKGSHA256=" + GA_SHA256
+        )
+    )
+    assert updater.bump(write=True, repo_root=repo) is None
