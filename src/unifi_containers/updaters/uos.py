@@ -34,18 +34,25 @@ class Release:
     sha256: str
 
 
+#: One filter, then match in python. Stacking `filter=` params does not AND them
+#: — asking for product+platform+channel together returns a single plausible-
+#: looking record of the wrong version, so the answer has to be checked rather
+#: than taken from position 0.
 def api_url(platform: str) -> str:
-    return (
-        f"{API}?filter=eq~~product~~unifi-os-server"
-        f"&filter=eq~~platform~~{platform}&filter=eq~~channel~~release"
-    )
+    return f"{API}?filter=eq~~product~~unifi-os-server"
 
 
-def parse_release(payload: bytes) -> Release:
+def parse_release(payload: bytes, platform: str, channel: str = "release") -> Release:
+    """The `channel`/`platform` build of unifi-os-server, or raise saying what was there."""
     fw = json.loads(payload)["_embedded"]["firmware"]
-    if not fw:
-        raise RuntimeError("firmware API returned no entries")
-    entry = fw[0]
+    matched = [f for f in fw if f.get("platform") == platform and f.get("channel") == channel]
+    if not matched:
+        seen = sorted({f"{f.get('channel')}/{f.get('platform')}" for f in fw})
+        raise RuntimeError(
+            f"the firmware API listed no {channel}/{platform} build of "
+            f"unifi-os-server, so its version is unknown (saw: {', '.join(seen) or 'nothing'})"
+        )
+    entry = matched[0]
     return Release(
         version=entry["version"].lstrip("v"),
         url=entry["_links"]["data"]["href"],
@@ -92,8 +99,8 @@ def bump(write=False, repo_root=Path(".")):
     pins_path = repo_root / PINS
     readme_path = repo_root / README
     current = pinfile.env_values(pins_path.read_text())["UOS_VERSION"]
-    amd64 = parse_release(fetch(api_url("linux-x64")))
-    arm64 = parse_release(fetch(api_url("linux-arm64")))
+    amd64 = parse_release(fetch(api_url("linux-x64")), "linux-x64")
+    arm64 = parse_release(fetch(api_url("linux-arm64")), "linux-arm64")
     check_versions_match(amd64, arm64)
     if Version(amd64.version) <= Version(current):
         return None

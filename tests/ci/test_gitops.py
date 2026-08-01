@@ -48,15 +48,6 @@ def test_tags_lists_tag_names_without_the_ref_prefix(local):
     assert gitops.tags(local) == ["network/10.4.57-1"]
 
 
-def test_the_current_branch_is_the_checked_out_one(local):
-    assert gitops.current_branch(local) == "main"
-
-
-def test_a_detached_head_has_no_branch(local):
-    local.set_head(local.head.target)
-    assert gitops.current_branch(local) is None
-
-
 def test_no_repository_is_an_error_not_an_empty_answer(tmp_path):
     with pytest.raises(gitops.GitError, match="no git repository"):
         gitops.repository(tmp_path / "not-a-repo")

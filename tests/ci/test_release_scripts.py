@@ -45,7 +45,6 @@ def test_plan_refuses_a_legacy_tag_with_the_expected_format():
 
 def test_plan_emits_the_values_the_workflows_read():
     assert emitted("network/10.4.57-1", []) == {
-        "rc": "false",
         "publish": "true",
         "image": "ghcr.io/jamesbraid/unifi-network",
         "push_base": "10.4.57",
@@ -53,7 +52,6 @@ def test_plan_emits_the_values_the_workflows_read():
         "push_seeded": "10.4.57-seeded",
         "globals": "latest sim seeded",
         "build": "10.4.57-1",
-        "build_variants": "true",
     }
 
 
@@ -70,14 +68,6 @@ def test_no_published_name_carries_a_build_number():
     ]
     assert values["build"] == "10.4.57-7"
     assert all(not name.endswith("-7") for name in published), published
-
-
-def test_an_rc_plan_builds_the_base_image_only():
-    values = emitted("network/10.4.57-rc-2", [])
-    assert values["build_variants"] == "false"
-    # An RC pushes only a base image, under its own version name.
-    assert (values["push_base"], values["globals"]) == ("10.4.57-rc", "rc")
-    assert values["push_sim"] == "" and values["push_seeded"] == ""
 
 
 def test_a_rebuild_of_the_current_version_publishes_every_name():
@@ -107,7 +97,7 @@ def test_rerunning_an_older_builds_workflow_publishes_nothing():
 
 
 def test_a_pinned_version_with_no_tag_is_due():
-    rel, reason = cut.decide("network", "10.4.57", [], is_rc=False)
+    rel, reason = cut.decide("network", "10.4.57", [])
     assert rel.git_tag == "network/10.4.57-1"
     assert "no release tag yet" in reason
 
@@ -115,49 +105,32 @@ def test_a_pinned_version_with_no_tag_is_due():
 def test_an_already_released_version_is_not_due_again():
     # Idempotence is what lets this run on every push: the second run must cut
     # nothing rather than pile up build numbers.
-    rel, reason = cut.decide("network", "10.4.57", ["network/10.4.57-1"], is_rc=False)
+    rel, reason = cut.decide("network", "10.4.57", ["network/10.4.57-1"])
     assert rel is None
     assert "already released" in reason
 
 
 def test_a_bump_is_due_even_though_the_previous_version_has_builds():
-    rel, _ = cut.decide("network", "10.4.58", ["network/10.4.57-3"], is_rc=False)
+    rel, _ = cut.decide("network", "10.4.58", ["network/10.4.57-3"])
     assert rel.git_tag == "network/10.4.58-1"
 
 
 def test_an_unpinned_product_is_never_due():
-    rel, reason = cut.decide("network", None, [], is_rc=False)
+    rel, reason = cut.decide("network", None, [])
     assert rel is None
     assert "no pinned version" in reason
 
 
-def test_the_rc_branch_cuts_rc_tags():
-    rel, _ = cut.decide("network", "10.5.66", [], is_rc=True)
-    assert rel.git_tag == "network/10.5.66-rc-1"
-
-
-def test_a_stable_tag_does_not_satisfy_the_rc_lane():
-    # Same upstream version, different channel: publishing the stable release
-    # must not stop the rc branch cutting its own.
-    rel, _ = cut.decide("network", "10.5.66", ["network/10.5.66-1"], is_rc=True)
-    assert rel.git_tag == "network/10.5.66-rc-1"
-
-
 def test_a_rebuild_advances_the_build_number():
-    rel, reason = cut.decide_rebuild("network", "10.4.57", ["network/10.4.57-1"], is_rc=False)
+    rel, reason = cut.decide_rebuild("network", "10.4.57", ["network/10.4.57-1"])
     assert rel.git_tag == "network/10.4.57-2"
     assert "rebuilding" in reason
 
 
 def test_a_rebuild_of_something_never_released_is_refused():
-    rel, reason = cut.decide_rebuild("network", "10.4.57", [], is_rc=False)
+    rel, reason = cut.decide_rebuild("network", "10.4.57", [])
     assert rel is None
     assert "never been released" in reason
-
-
-def test_the_branch_comes_from_ci_before_git():
-    assert cut.current_branch({"CI_COMMIT_BRANCH": "rc"}) == "rc"
-    assert cut.current_branch({"GITHUB_REF_NAME": "main"}) == "main"
 
 
 def test_the_push_target_uses_ci_credentials_when_present():
@@ -208,12 +181,6 @@ def test_each_sliding_name_tracks_its_own_variant(names):
     assert rec.calls == [("img", name, d) for name, d in zip(names, digests)]
 
 
-def test_rc_tracks_the_base_image():
-    rec = Recorder()
-    slide.slide("img", ["rc"], {"base": "sha256:a"}, create=rec.create, out=rec.out)
-    assert rec.calls == [("img", "rc", "sha256:a")]
-
-
 def test_a_requested_name_with_no_digest_fails_the_run():
     # Pointing `seeded` at the base digest would publish an image that is not
     # seeded, so it must not be substituted. Skipping it is not enough either:
@@ -234,10 +201,6 @@ def test_a_missing_digest_is_a_non_zero_exit_not_a_partial_success():
     assert slide.apply("img", "seeded latest", base="sha256:a") == 1
 
 
-def test_a_version_level_rc_name_tracks_the_base_image():
-    assert slide.variant_for("10.5.66-rc") == "base"
-
-
 @pytest.mark.parametrize(
     "name",
     [
@@ -253,9 +216,8 @@ def test_an_unknown_sliding_tag_is_an_error(name):
         slide.slide("img", [name], {"base": "sha256:a"}, create=lambda *a: None, out=lambda _: None)
 
 
-def test_the_plan_refuses_an_rc_tag_for_a_product_with_no_rc_channel():
-    # Hand-pushing unifi-os/5.1.21-rc-1 used to yield a publishable plan whose
-    # push_sim/push_seeded were empty, colliding on `staging--<arch>` only after
-    # the builds had run.
-    with pytest.raises(ValueError, match="no RC channel"):
-        plan_script.plan("unifi-os/5.1.21-rc-1", [], pinned_lookup=pinned)
+def test_the_plan_refuses_a_retired_rc_tag():
+    # RC support is gone, so `-rc` no longer parses as a release at all. A tag
+    # left over from that era must be refused rather than read as build 1.
+    with pytest.raises(ValueError, match="not a release tag"):
+        plan_script.plan("network/10.5.67-rc-1", [], pinned_lookup=pinned)
