@@ -26,14 +26,8 @@ def plan(git_tag, tags, pinned_lookup=pins.pinned_version):
     if rel is None:
         raise ValueError(
             f"{git_tag!r} is not a release tag. Expected "
-            f"<product>/<version>[-rc]-<revision>, e.g. network/10.4.57-1 or "
+            f"<product>/<version>-<revision>, e.g. network/10.4.57-1 or "
             f"unifi-os/5.1.21-3"
-        )
-
-    if rel.is_rc and not release.has_rc_channel(rel.product):
-        raise ValueError(
-            f"{git_tag} is a release candidate, but {rel.product} has no RC "
-            f"channel upstream. Nothing would be built for it to point at."
         )
 
     pinned = pinned_lookup(rel.product)
@@ -48,7 +42,7 @@ def plan(git_tag, tags, pinned_lookup=pins.pinned_version):
         release=rel,
         pinned=pinned,
         newest_build=release.is_highest_build(tags, rel),
-        top=release.is_top_of_channel(tags, rel),
+        top=release.is_highest_stable(tags, rel),
     )
 
 
@@ -67,10 +61,6 @@ def emit(plan, stream):
         ("push_sim", version.get("sim", "")),
         ("push_seeded", version.get("seeded", "")),
         ("globals", " ".join(release.global_tags(rel, plan.top)) if plan.newest_build else ""),
-        ("rc", "true" if rel.is_rc else "false"),
-        # The rc lane stops at the base image: sim needs a demo fleet nobody
-        # tests against a pre-release, seeded needs a wizard run.
-        ("build_variants", "false" if rel.is_rc else "true"),
         # Reporting only. Never a push target -- it carries the build number.
         ("build", rel.version),
     ]
@@ -94,13 +84,11 @@ def report(tag, github=False):
         return 0
 
     rel = result.release
-    channel = "release candidate" if rel.is_rc else "stable"
-    print(f"{rel.product}: {channel} {rel.upstream}, build {rel.revision}")
+    print(f"{rel.product}: {rel.upstream}, build {rel.revision}")
     print(f"  image        {rel.image}")
     print(f"  pinned       {result.pinned}")
     print(f"  newest build {result.newest_build}")
     print(f"  highest      {result.top}")
     sliding = release.sliding_tags(rel, result.newest_build, result.top)
     print(f"  tags         {' '.join(sliding) or '(none)'}")
-    print(f"  variants     {'base only' if rel.is_rc else 'base, sim, seeded'}")
     return 0

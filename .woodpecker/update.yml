@@ -14,14 +14,6 @@ steps:
     commands:
       - uv run -p 3.13 unifi-containers update stable
 
-  update-rc:
-    image: ghcr.io/astral-sh/uv:python3.13-alpine
-    environment:
-      FORGEJO_TOKEN:
-        from_secret: forgejo_ci_token
-    commands:
-      - uv run -p 3.13 unifi-containers update rc
-
   update-uos:
     image: ghcr.io/astral-sh/uv:python3.13-alpine
     environment:

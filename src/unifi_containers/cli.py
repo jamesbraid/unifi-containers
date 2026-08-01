@@ -70,7 +70,7 @@ def extract_uos_cmd(
 
 
 @app.command("update")
-def update_cmd(lane: str = typer.Argument(..., help="stable, rc or uos")):
+def update_cmd(lane: str = typer.Argument(..., help="stable or uos")):
     """Run one updater lane and open an auto-merging bump PR."""
     if lane not in update.LANES:
         raise typer.BadParameter(f"unknown lane {lane!r}; expected {sorted(update.LANES)}")
@@ -80,12 +80,11 @@ def update_cmd(lane: str = typer.Argument(..., help="stable, rc or uos")):
 @app.command("bump-pins")
 def bump_pins_cmd(
     product: str = typer.Argument(..., help=f"one of {', '.join(PRODUCTS)}"),
-    channel: str = typer.Option("stable", "--channel", help="network only: stable or rc"),
     write: bool = typer.Option(False, "--write", help="rewrite the pins and README"),
 ):
     """Rewrite the pins to the newest upstream release. Prints the version, or nothing."""
     if product == "network":
-        version = network_updater.bump(channel=channel, write=write)
+        version = network_updater.bump(write=write)
     elif product == "unifi-os":
         version = uos_updater.bump(write=write)
     else:

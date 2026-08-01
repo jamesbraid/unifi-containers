@@ -93,15 +93,8 @@ jobs:
             VERSION=${{ steps.ver.outputs.build }}
             REVISION=${{ github.sha }}
 
-      - name: Point the rc sliding tag (the RC lane stops here)
-        if: steps.ver.outputs.publish == 'true' && steps.ver.outputs.rc == 'true'
-        run: |
-          uv run -p 3.13 unifi-containers slide-tags --image "$IMAGE" \
-            --tags "${{ steps.ver.outputs.globals }}" \
-            --base "${{ steps.push.outputs.digest }}"
-
       - name: Push sim image (multi-arch, from the pushed base digest)
-        if: steps.ver.outputs.publish == 'true' && steps.ver.outputs.build_variants == 'true'
+        if: steps.ver.outputs.publish == 'true'
         id: pushsim
         uses: docker/build-push-action@v6
         with:
@@ -115,7 +108,7 @@ jobs:
       # The wizard run is the check: a wizard that does not complete fails here
       # rather than snapshotting a half-seeded volume.
       - name: Produce seed data (boot the pushed digest, complete the wizard)
-        if: steps.ver.outputs.publish == 'true' && steps.ver.outputs.build_variants == 'true'
+        if: steps.ver.outputs.publish == 'true'
         run: uv run -p 3.13 unifi-containers make-seed "$IMAGE@${{ steps.push.outputs.digest }}"
 
       # The seeded image cannot be gated with the others: seed.tgz is produced
@@ -123,7 +116,7 @@ jobs:
       # it for amd64 only and prove the baked admin authenticates before the
       # multi-arch push.
       - name: Health gate the seeded image
-        if: steps.ver.outputs.publish == 'true' && steps.ver.outputs.build_variants == 'true'
+        if: steps.ver.outputs.publish == 'true'
         env:
           UNIFI_TEST_NETWORK_SEEDED_IMAGE: unifi-network:seedgate
         run: |
@@ -134,7 +127,7 @@ jobs:
             pytest tests/integration -m integration -k seeded_variant
 
       - name: Push seeded image (multi-arch, from the pushed base digest)
-        if: steps.ver.outputs.publish == 'true' && steps.ver.outputs.build_variants == 'true'
+        if: steps.ver.outputs.publish == 'true'
         id: pushseeded
         uses: docker/build-push-action@v6
         with:
@@ -147,7 +140,7 @@ jobs:
 
       # Which tags move was decided by release-plan; this only applies it.
       - name: Move the sliding tags
-        if: steps.ver.outputs.publish == 'true' && steps.ver.outputs.build_variants == 'true'
+        if: steps.ver.outputs.publish == 'true'
         run: |
           uv run -p 3.13 unifi-containers slide-tags --image "$IMAGE" \
             --tags "${{ steps.ver.outputs.globals }}" \
