@@ -23,5 +23,5 @@ FROM ${BASE_IMAGE}
 COPY demo-mode /usr/local/unifi/init.d/demo-mode
 RUN chmod 755 /usr/local/unifi/init.d/demo-mode
 
-HEALTHCHECK --interval=10s --timeout=6s --start-period=5m --retries=5 \
+HEALTHCHECK --interval=10s --timeout=20s --start-period=5m --retries=5 \
   CMD ["/usr/bin/python3", "-m", "unifi_runtime.healthcheck", "network-sim"]

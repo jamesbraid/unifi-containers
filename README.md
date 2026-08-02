@@ -96,9 +96,10 @@ both would have mapped onto `network/10.4.57-1`.
 
 The `-sim` tags boot straight into a demo controller: `admin`/`admin`
 account, seeded demo sites and devices (3 APs, 1 gateway, 5 switches), no
-setup wizard. The image's healthcheck only reports healthy once the API
-answers a real JSON login, so "wait for healthy" is a reliable readiness
-signal:
+setup wizard. The image's healthcheck reports healthy only once a real JSON
+login succeeds, the v2 API surface answers, and all 9 demo devices are
+present — the three things that come up at different times during boot. So
+"wait for healthy" is the whole readiness contract:
 
 ```bash
 docker run -d --name unifi -p 8443:8443 ghcr.io/jamesbraid/unifi-network:sim
@@ -137,7 +138,7 @@ build time. Credentials: **`admin` / `unifi-containers-seeded`**
 
 ```bash
 docker run -d --name unifi -p 8443:8443 ghcr.io/jamesbraid/unifi-network:seeded
-# wait for healthy (healthcheck = seeded-login probe), then the API is yours:
+# wait for healthy (healthcheck = seeded-login + v2 probes), then the API is yours:
 curl -ks -X POST -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"unifi-containers-seeded"}' \
   https://localhost:8443/api/login
@@ -154,7 +155,7 @@ Credentials: **`admin` / `admin`** (override with `UOS_ADMIN_USER` /
 
 ```bash
 TAG=seeded docker compose -f unifi-os/examples/docker-compose.yml up --wait
-# healthcheck = API-key probe + ucore-login probe; then:
+# healthcheck = API-key probe + ucore-login probe + v2 probe; then:
 curl -ks -X POST -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin"}' \
   https://localhost:11443/api/auth/login
@@ -205,8 +206,11 @@ owner.
 
 ## Using from test harnesses
 
-Every image's healthcheck means "the controller API answers" — so any
-healthy-wait strategy is a correct readiness signal:
+Every image's healthcheck proves the surfaces a harness actually uses are
+live, not merely that the port is open: a real JSON login, the v2 API (which
+5xxs for a window after login works, while zone-based-firewall defaults
+materialize), and on `-sim` the full demo fleet. Waiting for healthy is
+therefore sufficient — you should not need a readiness poll of your own:
 
 - **docker compose**: `docker compose up --wait`
 - **testcontainers (any language)**: use the container-healthy wait
@@ -215,7 +219,10 @@ healthy-wait strategy is a correct readiness signal:
   sim/seeded variants since state is deterministic.
 - **Startup budgets**, measured to healthy on Apple Silicon / native arm64:
   `unifi-network:sim` 39 s; `unifi-os-server` base 32 s, `-sim` 66 s,
-  `-seeded` 78 s. Size your own timeout off the CI gate's ceilings instead —
+  `-seeded` 78 s. Healthy now also waits for the v2 surface and the demo
+  fleet, so on a loaded machine it can land well past these — that wait used
+  to happen in your test code instead. Size your own timeout off the CI
+  gate's ceilings instead —
   300 s for the network images, 900 s for UOS — because a cold pull and an
   emulated arch both dwarf the boot itself.
 - **Colima / Docker Desktop / Podman**: all fine for `unifi-network`.
@@ -253,10 +260,12 @@ curl -X POST -H 'Content-Type: application/json' \
   -d '{"username":"admin","password":"admin"}' http://localhost:7443/api/login
 ```
 
-The sim healthcheck only reports healthy once that login answers `rc: ok`.
-Healthy means the API answers — the demo device fleet finishes populating a
-few seconds *after* that, so a test that reads `stat/device` the instant the
-container goes healthy may see an incomplete set; poll for the count you need.
+The sim healthcheck reports healthy once that login answers `rc: ok`, the v2
+API surface stops 5xxing, and the demo fleet is fully populated. Those three
+land at different times during boot, so reading `stat/device` or a v2
+endpoint the instant the container goes healthy is safe — no poll of your
+own. The expected device count follows `DEMO_NUM_UAP` / `DEMO_NUM_UGW` /
+`DEMO_NUM_USW`. Set `SIM_EXPECT_DEVICES` to override the total outright.
 Note `7443` is plain HTTP: an HTTPS client gets a TLS-handshake error
 (`SSL: WRONG_VERSION_NUMBER`), not a redirect.
 
