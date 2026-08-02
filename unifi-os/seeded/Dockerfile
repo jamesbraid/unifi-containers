@@ -36,5 +36,5 @@ ENV UOS_SEED_OWNER=true \
 # This variant always seeds, so the unit is enabled at build time.
 RUN systemctl enable uos-seed-owner.service
 
-HEALTHCHECK --interval=10s --timeout=8s --start-period=10m --retries=6 \
+HEALTHCHECK --interval=10s --timeout=20s --start-period=10m --retries=6 \
   CMD ["/usr/bin/python3", "-m", "unifi_runtime.healthcheck", "seeded"]

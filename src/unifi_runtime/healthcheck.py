@@ -5,12 +5,20 @@
 Docker runs these every few seconds forever and UniFi rate-limits login
 globally (429, Retry-After up to an hour), so `marker_gate` proves readiness
 once and is a file test thereafter, and probe parts run rate-limited last.
+
+Logging in is not the last thing to come up. On the variants that have an
+admin, two surfaces settle *after* it: the v2 API, which 5xxs while
+zone-based-firewall defaults materialize, and the demo fleet, which populates
+a few seconds later still. Both are gated here so "wait for healthy" is the
+whole contract and no consumer has to hand-roll those waits — which is what
+every consumer was otherwise doing.
 """
 
 import os
 import sys
 
 from . import sysprops
+from .entrypoint import demo
 from .env import is_enabled, setting
 from .http import json_request
 from .seed.network_wizard import SEED_PASS, SEED_USER
@@ -18,6 +26,18 @@ from .unifi.network import NetworkApp
 from .unifi.ucore import Ucore
 
 MARKER = "/tmp/unifi-ready"
+
+#: The login is proven separately from, and earlier than, full readiness: the
+#: stages after it can take a while, and re-logging in meanwhile is precisely
+#: what the rate limiter punishes.
+LOGIN_MARKER = "/tmp/unifi-login-ready"
+
+#: Where the proven session lives. Docker runs every healthcheck as a fresh
+#: process, so an in-memory session would be gone by the next tick — only a jar
+#: on disk lets one login serve the later stages.
+COOKIE_JAR = "/tmp/unifi-cookies"
+
+DEFAULT_SITE = "default"
 
 PROBE_TIMEOUT = 5
 
@@ -38,6 +58,71 @@ def marker_gate(probe, marker=MARKER):
     return True
 
 
+def _forget(marker):
+    """Drop a marker so its stage is proven again."""
+    try:
+        os.remove(marker)
+    except OSError:
+        pass
+
+
+def v2_settled(status):
+    """True once the v2 surface has stopped failing.
+
+    Deliberately not `== 200`: a controller predating zone-based firewall has
+    no such endpoint and 404s, which is a ready controller with nothing left to
+    wait for. A request that never landed is 0, which this rejects.
+    """
+    return 200 <= status < 500
+
+
+def expected_fleet(env=None):
+    """How many demo devices this image seeds.
+
+    Derived from the settings `demo-mode` actually writes rather than restated
+    here: a count that disagreed with the seed would either wedge the gate
+    forever or let it pass early. SIM_EXPECT_DEVICES overrides the total.
+    """
+    env = os.environ if env is None else env
+    override = env.get("SIM_EXPECT_DEVICES")
+    if override:
+        try:
+            return int(override)
+        except ValueError:
+            pass
+    settings = demo.demo_settings(env)
+    total = 0
+    for key in ("demo.num_uap", "demo.num_ugw", "demo.num_usw"):
+        try:
+            total += int(settings[key])
+        except (KeyError, TypeError, ValueError):
+            # A garbled DEMO_NUM_* undercounts, which opens the gate early.
+            # Wedging the container shut over a typo would be worse.
+            pass
+    return total
+
+
+def staged(login_probe, v2_status, fleet_ready=None, login_marker=LOGIN_MARKER):
+    """Prove the login once, then the surfaces that settle after it.
+
+    The login carries its own marker so it runs exactly once however long the
+    later stages take. That is the point: extending readiness must cost zero
+    extra logins.
+    """
+    if not marker_gate(login_probe, login_marker):
+        return False
+    status = v2_status()
+    if status in (401, 403):
+        # The session died. This must be tested before v2_settled, because 401
+        # is numerically below 500 and would otherwise read as ready. Dropping
+        # the marker makes the next tick authenticate again.
+        _forget(login_marker)
+        return False
+    if not v2_settled(status):
+        return False
+    return fleet_ready is None or fleet_ready()
+
+
 # --- UniFi OS Server probes -------------------------------------------
 
 
@@ -46,11 +131,19 @@ def uos_ready(base_url="https://localhost", timeout=PROBE_TIMEOUT):
     return Ucore(base_url, timeout=timeout).is_api_answering()
 
 
+#: The bundled Network App, reached directly rather than through the UOS proxy.
+UOS_NETWORK_URL = "http://127.0.0.1:8081"
+
+
 def sim_ready(
-    base_url="http://127.0.0.1:8081", username="admin", password="admin", timeout=PROBE_TIMEOUT
+    base_url=UOS_NETWORK_URL,
+    username="admin",
+    password="admin",
+    timeout=PROBE_TIMEOUT,
+    cookie_jar=None,
 ):
     """-sim variant: the bundled Network App can genuinely authenticate. Rate-limited."""
-    return NetworkApp(base_url, timeout=timeout).login_ok(username, password)
+    return NetworkApp(base_url, timeout=timeout, cookie_jar=cookie_jar).login_ok(username, password)
 
 
 def seeded_ready(
@@ -59,9 +152,10 @@ def seeded_ready(
     username="admin",
     password="admin",
     timeout=PROBE_TIMEOUT,
+    cookie_jar=None,
 ):
     """-seeded variant: both seed steps finished. An unset `key_file` means that seed is off."""
-    ucore = Ucore(base_url, timeout=timeout)
+    ucore = Ucore(base_url, timeout=timeout, cookie_jar=cookie_jar)
     if key_file:
         key = _read(key_file)
         if not key:
@@ -108,21 +202,50 @@ def network_answering(base_url=None, timeout=PROBE_TIMEOUT):
     return 200 <= json_request(base_url or network_url(), timeout=timeout).status < 400
 
 
-def network_login_ready(username, password, base_url=None, timeout=PROBE_TIMEOUT):
+def network_login_ready(username, password, base_url=None, timeout=PROBE_TIMEOUT, cookie_jar=None):
     """-sim and -seeded: the controller can genuinely authenticate."""
-    return NetworkApp(base_url or network_url(), timeout=timeout).login_ok(username, password)
+    return NetworkApp(base_url or network_url(), timeout=timeout, cookie_jar=cookie_jar).login_ok(
+        username, password
+    )
+
+
+def _network_app(cookie_jar=COOKIE_JAR):
+    return NetworkApp(network_url(), timeout=PROBE_TIMEOUT, cookie_jar=cookie_jar)
+
+
+def _fleet_ready(app, site=DEFAULT_SITE):
+    """Every seeded demo device is present, not merely the first one.
+
+    The fleet populates incrementally, so "at least one device" still hands out
+    a half-built controller — which is exactly the race a consumer polling
+    stat/device was working around.
+    """
+    return len(app.devices(site)) >= expected_fleet()
 
 
 def _network_sim():
-    return marker_gate(lambda: network_login_ready("admin", "admin"))
+    app = _network_app()
+    return marker_gate(
+        lambda: staged(
+            lambda: app.login_ok("admin", "admin"), app.v2_status, lambda: _fleet_ready(app)
+        )
+    )
 
 
 def _network_seeded():
-    return marker_gate(lambda: network_login_ready(SEED_USER, SEED_PASS))
+    # No fleet stage: -seeded is a real empty site, so waiting for devices
+    # would wedge it shut forever.
+    app = _network_app()
+    return marker_gate(lambda: staged(lambda: app.login_ok(SEED_USER, SEED_PASS), app.v2_status))
 
 
 def _sim():
-    return marker_gate(sim_ready)
+    app = NetworkApp(UOS_NETWORK_URL, timeout=PROBE_TIMEOUT, cookie_jar=COOKIE_JAR)
+    return marker_gate(
+        lambda: staged(
+            lambda: sim_ready(cookie_jar=COOKIE_JAR), app.v2_status, lambda: _fleet_ready(app)
+        )
+    )
 
 
 def _seeded():
@@ -131,11 +254,16 @@ def _seeded():
     # variant Dockerfile silently disabled this probe.
     env = os.environ
     seeding = is_enabled(env.get("UOS_SEED_API_KEY"))
+    # No fleet stage: -seeded seeds an owner, not devices.
     return marker_gate(
-        lambda: seeded_ready(
-            key_file=setting("UOS_API_KEY_FILE", env) if seeding else None,
-            username=setting("UOS_ADMIN_USER", env),
-            password=setting("UOS_ADMIN_PASS", env),
+        lambda: staged(
+            lambda: seeded_ready(
+                key_file=setting("UOS_API_KEY_FILE", env) if seeding else None,
+                username=setting("UOS_ADMIN_USER", env),
+                password=setting("UOS_ADMIN_PASS", env),
+                cookie_jar=COOKIE_JAR,
+            ),
+            Ucore(timeout=PROBE_TIMEOUT, cookie_jar=COOKIE_JAR).v2_status,
         )
     )
 

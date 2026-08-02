@@ -183,6 +183,9 @@ def test_the_key_probe_follows_the_seed_flag_not_the_path(monkeypatch):
     monkeypatch.setattr(healthcheck, "seeded_ready", spy)
     monkeypatch.setattr(healthcheck.os.path, "exists", lambda _p: False)
     monkeypatch.setattr(healthcheck, "MARKER", "/nonexistent-marker")
+    # Only the login stage is under test here. Collapsing `staged` to it keeps
+    # the later stages from reaching for a controller that is not running.
+    monkeypatch.setattr(healthcheck, "staged", lambda login_probe, *_a, **_kw: login_probe())
 
     monkeypatch.delenv("UOS_API_KEY_FILE", raising=False)
     monkeypatch.setenv("UOS_SEED_API_KEY", "true")
@@ -211,7 +214,10 @@ def test_the_seed_step_and_the_probe_read_the_flag_the_same_way(value, monkeypat
     monkeypatch.setattr(healthcheck, "seeded_ready", spy)
     # marker_gate's default marker is bound at def time, so patching MARKER does
     # not reach it. Bypass the gate rather than depend on /tmp.
-    monkeypatch.setattr(healthcheck, "marker_gate", lambda probe: probe())
+    monkeypatch.setattr(healthcheck, "marker_gate", lambda probe, *_a: probe())
+    # Only the login stage is under test here. Collapsing `staged` to it keeps
+    # the later stages from reaching for a controller that is not running.
+    monkeypatch.setattr(healthcheck, "staged", lambda login_probe, *_a, **_kw: login_probe())
     monkeypatch.setenv("UOS_SEED_API_KEY", value)
 
     healthcheck.PROBES["seeded"]()
