@@ -13,6 +13,17 @@ permissions:
 
 env:
   IMAGE: ghcr.io/jamesbraid/unifi-os-server
+  # Per-arch images land here, never in the published package. `imagetools
+  # create` copies the manifests AND their blobs into the target repository —
+  # verified against a registry: the child manifest and its layers both resolve
+  # under the target afterwards — so the published image does not depend on this
+  # package surviving, and it can be thrown away.
+  #
+  # Pushing them into the published package instead is what left six permanent
+  # `staging-*` tags per release: within one repository the pushed manifests ARE
+  # the manifest-list children, so the tags cannot be removed without deleting
+  # the image they point into.
+  STAGING: ghcr.io/jamesbraid/unifi-os-server-staging
 
 jobs:
   build:
@@ -25,8 +36,7 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     # Both matrix legs resolve these to the same strings, so which leg wins the
-    # write does not matter. The per-arch images are reached by their staging
-    # tags instead, which are derived from push_base and so need no plumbing.
+    # write does not matter.
     outputs:
       publish: ${{ steps.ver.outputs.publish }}
       push_base: ${{ steps.ver.outputs.push_base }}
@@ -50,7 +60,7 @@ jobs:
 
       # Nothing below runs for a superseded build. The push targets it would
       # interpolate are blank by then, so all three variants would collapse onto
-      # one `staging--<arch>` tag and collide after the builds had already run.
+      # one tag and collide after the builds had already run.
       - name: Refuse to publish a superseded build
         if: steps.ver.outputs.publish != 'true'
         run: echo "::notice::${GITHUB_REF_NAME} is not the newest build of its upstream version; nothing to publish"
@@ -63,36 +73,37 @@ jobs:
         if: steps.ver.outputs.publish == 'true'
         run: uv run -p 3.13 unifi-containers extract-uos ${{ matrix.arch }}
 
+      # The default docker driver, deliberately: the base is extracted from the
+      # vendor installer and `docker load`ed, and a docker-container builder
+      # cannot read the local image store — it tries to pull `uos-base:local`
+      # from docker.io and fails.
+      #
       # Root context for the base: the shared python package lives at src/ and
       # COPY cannot reach outside its context. sim/seeded keep their small
       # contexts — they inherit the package and PYTHONPATH from the base.
       - name: Build base, sim, and seeded images
         if: steps.ver.outputs.publish == 'true'
         run: |
-          base="$IMAGE:staging-${{ steps.ver.outputs.push_base }}-${{ matrix.arch }}"
           docker build -f unifi-os/Dockerfile \
             --build-arg UOS_VERSION="${{ steps.ver.outputs.build }}" \
-            --build-arg REVISION="${GITHUB_SHA}" -t "$base" .
-          docker build --build-arg BASE_IMAGE="$base" \
-            -t "$IMAGE:staging-${{ steps.ver.outputs.push_sim }}-${{ matrix.arch }}" unifi-os/sim/
-          docker build --build-arg BASE_IMAGE="$base" \
-            -t "$IMAGE:staging-${{ steps.ver.outputs.push_seeded }}-${{ matrix.arch }}" unifi-os/seeded/
+            --build-arg REVISION="${GITHUB_SHA}" -t uos:base .
+          docker build --build-arg BASE_IMAGE=uos:base -t uos:sim unifi-os/sim/
+          docker build --build-arg BASE_IMAGE=uos:base -t uos:seeded unifi-os/seeded/
 
       - name: Shipped package imports on the image's own interpreter
         if: steps.ver.outputs.publish == 'true'
-        run: |
-          docker run --rm --entrypoint /usr/bin/python3 \
-            "$IMAGE:staging-${{ steps.ver.outputs.push_base }}-${{ matrix.arch }}" \
-            -m unifi_runtime.selfcheck
+        run: docker run --rm --entrypoint /usr/bin/python3 uos:base -m unifi_runtime.selfcheck
 
-      # The suite boots each variant under the documented runtime contract and
-      # tears it down even when an assertion fails.
+      # Native, on this arch's own runner: an arm64 image is booted on an arm64
+      # machine rather than trusted. The suite boots each variant under the
+      # documented runtime contract and tears it down even when an assertion
+      # fails. Nothing has been pushed anywhere at this point.
       - name: Health gate all three variants (native) — a broken image never publishes
         if: steps.ver.outputs.publish == 'true'
         env:
-          UNIFI_TEST_UOS_IMAGE: ${{ env.IMAGE }}:staging-${{ steps.ver.outputs.push_base }}-${{ matrix.arch }}
-          UNIFI_TEST_UOS_SIM_IMAGE: ${{ env.IMAGE }}:staging-${{ steps.ver.outputs.push_sim }}-${{ matrix.arch }}
-          UNIFI_TEST_UOS_SEEDED_IMAGE: ${{ env.IMAGE }}:staging-${{ steps.ver.outputs.push_seeded }}-${{ matrix.arch }}
+          UNIFI_TEST_UOS_IMAGE: uos:base
+          UNIFI_TEST_UOS_SIM_IMAGE: uos:sim
+          UNIFI_TEST_UOS_SEEDED_IMAGE: uos:seeded
         run: uv run -p 3.13 --extra test pytest tests/integration -m integration -k uos
 
       - name: Log in to GHCR
@@ -103,12 +114,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Push the per-arch staging images
+      - name: Push the gated images to the staging package
         if: steps.ver.outputs.publish == 'true'
         run: |
-          docker push "$IMAGE:staging-${{ steps.ver.outputs.push_base }}-${{ matrix.arch }}"
-          docker push "$IMAGE:staging-${{ steps.ver.outputs.push_sim }}-${{ matrix.arch }}"
-          docker push "$IMAGE:staging-${{ steps.ver.outputs.push_seeded }}-${{ matrix.arch }}"
+          set -euo pipefail
+          for variant in base sim seeded; do
+            docker tag "uos:$variant" "$STAGING:$variant-${{ matrix.arch }}"
+            docker push "$STAGING:$variant-${{ matrix.arch }}"
+          done
 
   manifest:
     needs: build
@@ -130,15 +143,15 @@ jobs:
 
       # slide-tags points names at digests, so the stitched manifest-list digest
       # has to come back out of the registry once each list exists.
-      - name: Stitch multi-arch tags
+      - name: Stitch multi-arch tags from the staged per-arch images
         id: stitch
         run: |
-          set -o pipefail
-          stitch() {   # stitch <variant> <tag>: create the list, print its digest
+          set -euo pipefail
+          stitch() {   # stitch <variant> <published-tag>: create the list, print its digest
             local digest
             # >&2 because only the digest line may reach $GITHUB_OUTPUT.
             docker buildx imagetools create -t "$IMAGE:$2" \
-              "$IMAGE:staging-$2-amd64" "$IMAGE:staging-$2-arm64" >&2
+              "$STAGING:$1-amd64" "$STAGING:$1-arm64" >&2
             # An assignment, not an echo substitution: this has to fail the step
             # rather than hand slide-tags an empty digest it would only skip.
             digest=$(docker buildx imagetools inspect "$IMAGE:$2" \
@@ -152,6 +165,42 @@ jobs:
             stitch seeded "${{ needs.build.outputs.push_seeded }}"
           } >> "$GITHUB_OUTPUT"
 
+      # The staging package is deleted below, so the published image has to be
+      # standing on its own copies by now. imagetools does copy cross-repository,
+      # but proving it here is the difference between deleting staging safely and
+      # deleting the images out from under the tags.
+      - name: Prove the published images do not depend on the staging package
+        env:
+          TAGS: >-
+            ${{ needs.build.outputs.push_base }}
+            ${{ needs.build.outputs.push_sim }}
+            ${{ needs.build.outputs.push_seeded }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+
+          image = os.environ["IMAGE"]
+
+          def inspect(ref):
+              out = subprocess.run(
+                  ["docker", "buildx", "imagetools", "inspect", ref, "--raw"],
+                  capture_output=True, text=True,
+              )
+              if out.returncode != 0:
+                  sys.exit(f"{ref} does not resolve: {out.stderr.strip()[:200]}")
+              return json.loads(out.stdout)
+
+          for tag in os.environ["TAGS"].split():
+              children = [m["digest"] for m in inspect(f"{image}:{tag}").get("manifests", [])]
+              if not children:
+                  sys.exit(f"{image}:{tag} has no child manifests")
+              for digest in children:
+                  # Resolving by digest against the PUBLISHED repository is the
+                  # check: it succeeds only if the manifest was copied there.
+                  inspect(f"{image}@{digest}")
+              print(f"  {tag}: {len(children)} children resolve under the published package")
+          PY
+
       # Which tags move was decided by release-plan; this only applies it.
       - name: Move the sliding tags
         run: |
@@ -160,3 +209,16 @@ jobs:
             --base "${{ steps.stitch.outputs.base }}" \
             --sim "${{ steps.stitch.outputs.sim }}" \
             --seeded "${{ steps.stitch.outputs.seeded }}"
+
+      # Best effort, and last: the release is already complete and verified
+      # self-contained by here. A token without delete rights leaves a tidy-up
+      # job behind, not a broken release.
+      - name: Discard the staging package
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method DELETE /user/packages/container/unifi-os-server-staging \
+            && echo "staging package deleted" \
+            || echo "::warning::could not delete the staging package; it holds no published image"
