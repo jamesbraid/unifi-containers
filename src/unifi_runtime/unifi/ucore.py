@@ -10,11 +10,17 @@ from ..http import DEFAULT_TIMEOUT, json_request
 #: The classic dialect proxied through UOS — what a production client calls.
 CLASSIC_PROXY = "/proxy/network/api/s/{site}/stat/device"
 
+#: The bundled Network App's v2 surface, proxied. Same lag as the standalone
+#: controller's: it 500s for a window after login already works.
+V2_PROXY = "/proxy/network/v2/api/site/{site}/firewall-policies"
+
 
 class Ucore:
-    def __init__(self, base_url="https://127.0.0.1", timeout=DEFAULT_TIMEOUT):
+    def __init__(self, base_url="https://127.0.0.1", timeout=DEFAULT_TIMEOUT, cookie_jar=None):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        #: Path to persist the session to. Without it every call is anonymous.
+        self.cookie_jar = cookie_jar
 
     def _url(self, path):
         return self.base_url + path
@@ -54,6 +60,20 @@ class Ucore:
             method="POST",
             payload={"username": username, "password": password},
             timeout=timeout,
+            cookie_jar=self.cookie_jar,
+        ).status
+
+    def v2_status(self, site="default", timeout=8):
+        """HTTP status of the proxied v2 surface, using the persisted session.
+
+        The session, not the X-API-KEY: the key is only established to
+        authenticate the classic dialect, and a key that turned out not to
+        cover v2 would wedge the gate at 401 forever.
+        """
+        return json_request(
+            self._url(V2_PROXY.format(site=site)),
+            timeout=timeout,
+            cookie_jar=self.cookie_jar,
         ).status
 
     def api_key_status(self, api_key, path=None, site="default", timeout=8):
