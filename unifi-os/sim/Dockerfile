@@ -29,5 +29,5 @@ RUN chmod 755 /usr/local/uos/init.d/demo-mode
 
 EXPOSE 7443/tcp
 
-HEALTHCHECK --interval=10s --timeout=8s --start-period=10m --retries=6 \
+HEALTHCHECK --interval=10s --timeout=20s --start-period=10m --retries=6 \
   CMD ["/usr/bin/python3", "-m", "unifi_runtime.healthcheck", "sim"]

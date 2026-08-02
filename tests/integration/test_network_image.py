@@ -67,3 +67,22 @@ def test_stopping_the_container_shuts_mongodb_down_cleanly():
         f"mongod was hard-killed, not shut down (container exited {status}). "
         f"Tail of {testing.MONGOD_LOG}:\n{log[-2000:]}"
     )
+
+
+def test_the_sim_variant_has_settled_v2_and_a_full_fleet_when_healthy(network_sim):
+    """The gate's whole claim: nothing is still settling once it goes green.
+
+    Both of these lag login readiness — v2 5xxs while zone-based-firewall
+    defaults materialize, and the demo fleet populates incrementally — and
+    consumers were hand-rolling a poll for each. Reaching this line without one
+    is the evidence that they no longer have to.
+    """
+    base = f"https://{network_sim.get_container_host_ip()}:{network_sim.get_exposed_port(testing.NETWORK_HTTPS_PORT)}"
+    session = httpx.Client(verify=False, timeout=15)
+    login = session.post(base + "/api/login", json={"username": "admin", "password": "admin"})
+    assert login.json()["meta"]["rc"] == "ok"
+
+    assert session.get(base + "/v2/api/site/default/firewall-policies").status_code < 500
+
+    devices = session.get(base + "/api/s/default/stat/device").json()["data"]
+    assert len(devices) == 9, f"demo fleet incomplete at healthy: {len(devices)} devices"
