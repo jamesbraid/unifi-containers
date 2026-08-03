@@ -13,10 +13,32 @@ permissions:
 
 env:
   IMAGE: ghcr.io/jamesbraid/unifi-network
+  # Per-arch images land here, never in the published package. `imagetools
+  # create` copies manifests and their blobs into the target repository, so the
+  # published image does not depend on this package and it is thrown away at the
+  # end. Same arrangement as the UniFi OS lane, for the same reason.
+  STAGING: ghcr.io/jamesbraid/unifi-network-staging
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
+  # Each arch builds and boots on its own runner. This lane used to build
+  # multi-arch on one amd64 machine and gate only what it could run, so the
+  # arm64 image shipped having never started.
+  build:
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    outputs:
+      publish: ${{ steps.ver.outputs.publish }}
+      build: ${{ steps.ver.outputs.build }}
+      push_base: ${{ steps.ver.outputs.push_base }}
+      push_sim: ${{ steps.ver.outputs.push_sim }}
+      push_seeded: ${{ steps.ver.outputs.push_seeded }}
+      globals: ${{ steps.ver.outputs.globals }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -32,44 +54,33 @@ jobs:
         id: ver
         run: uv run -p 3.13 unifi-containers release-plan "$GITHUB_REF_NAME" --github >> "$GITHUB_OUTPUT"
 
-      # Plain `docker build`, and before buildx is set up: the sim layer must
-      # resolve its base from the local daemon, which the buildx container
-      # driver cannot do.
-      #
-      # Root context for the base: the shared python package lives at src/ and
-      # COPY cannot reach outside its context. sim keeps its small context — it
-      # inherits the package and PYTHONPATH from the base image.
-      - name: Build base and sim (amd64) for the health gate
-        run: |
-          docker build -f network/Dockerfile -t unifi-network:gate \
-            --build-arg VERSION="${{ steps.ver.outputs.build }}" \
-            --build-arg REVISION="${GITHUB_SHA}" .
-          docker build --build-arg BASE_IMAGE=unifi-network:gate -t unifi-network:simgate network/sim/
-
-      - name: Shipped package imports on the image's own interpreter
-        run: docker run --rm --entrypoint /usr/bin/python3 unifi-network:gate -m unifi_runtime.selfcheck
-
-      # Pre-push, so a broken image never publishes. The suite covers the API
-      # login and mongod's clean shutdown, and tears its containers down even
-      # when an assertion fails.
-      - name: Health gate — a broken image never publishes
-        env:
-          UNIFI_TEST_NETWORK_IMAGE: unifi-network:gate
-          UNIFI_TEST_NETWORK_SIM_IMAGE: unifi-network:simgate
-        # `not seeded`: that image cannot exist yet — seed.tgz comes from the
-        # pushed base digest — and it is gated separately once it does.
-        run: uv run -p 3.13 --extra test pytest tests/integration -m integration -k "network and not seeded"
-
-      # An older build's workflow re-run must publish nothing: every name now
-      # slides, so pushing would drag it back onto an older image.
       - name: Refuse to publish a superseded build
         if: steps.ver.outputs.publish != 'true'
         run: echo "::notice::${GITHUB_REF_NAME} is not the newest build of its upstream version; nothing to publish"
 
-      - uses: docker/setup-qemu-action@v3
+      # Root context for the base: the shared python package lives at src/ and
+      # COPY cannot reach outside its context. sim keeps its small context — it
+      # inherits the package and PYTHONPATH from the base image.
+      - name: Build base and sim
         if: steps.ver.outputs.publish == 'true'
-      - uses: docker/setup-buildx-action@v3
+        run: |
+          docker build -f network/Dockerfile -t net:base \
+            --build-arg VERSION="${{ steps.ver.outputs.build }}" \
+            --build-arg REVISION="${GITHUB_SHA}" .
+          docker build --build-arg BASE_IMAGE=net:base -t net:sim network/sim/
+
+      - name: Shipped package imports on the image's own interpreter
         if: steps.ver.outputs.publish == 'true'
+        run: docker run --rm --entrypoint /usr/bin/python3 net:base -m unifi_runtime.selfcheck
+
+      # `not seeded`: that image cannot exist yet — seed.tgz comes from a booted
+      # base — and it gets its own native gate in the `seeded` job.
+      - name: Health gate base and sim (native) — a broken image never publishes
+        if: steps.ver.outputs.publish == 'true'
+        env:
+          UNIFI_TEST_NETWORK_IMAGE: net:base
+          UNIFI_TEST_NETWORK_SIM_IMAGE: net:sim
+        run: uv run -p 3.13 --extra test pytest tests/integration -m integration -k "network and not seeded"
 
       - name: Log in to GHCR
         if: steps.ver.outputs.publish == 'true'
@@ -79,71 +90,189 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Push base image (multi-arch)
+      - name: Push the gated images to the staging package
         if: steps.ver.outputs.publish == 'true'
-        id: push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: network/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ env.IMAGE }}:${{ steps.ver.outputs.push_base }}
-          build-args: |
-            VERSION=${{ steps.ver.outputs.build }}
-            REVISION=${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for variant in base sim; do
+            docker tag "net:$variant" "$STAGING:$variant-${{ matrix.arch }}"
+            docker push "$STAGING:$variant-${{ matrix.arch }}"
+          done
 
-      - name: Push sim image (multi-arch, from the pushed base digest)
-        if: steps.ver.outputs.publish == 'true'
-        id: pushsim
-        uses: docker/build-push-action@v6
+  # One seed serves both arches: it is a snapshot of the controller's own state,
+  # not of anything architecture-specific. Producing it needs a booted
+  # controller, so it happens here rather than in the build matrix.
+  seed:
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v5
         with:
-          context: network/sim
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ env.IMAGE }}:${{ steps.ver.outputs.push_sim }}
-          build-args: |
-            BASE_IMAGE=${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          enable-cache: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
 
       # The wizard run is the check: a wizard that does not complete fails here
       # rather than snapshotting a half-seeded volume.
-      - name: Produce seed data (boot the pushed digest, complete the wizard)
-        if: steps.ver.outputs.publish == 'true'
-        run: uv run -p 3.13 unifi-containers make-seed "$IMAGE@${{ steps.push.outputs.digest }}"
+      - name: Produce seed data (boot the staged base, complete the wizard)
+        run: uv run -p 3.13 unifi-containers make-seed "$STAGING:base-amd64"
 
-      # The seeded image cannot be gated with the others: seed.tgz is produced
-      # from the pushed base digest, so the earliest it can exist is here. Build
-      # it for amd64 only and prove the baked admin authenticates before the
-      # multi-arch push.
-      - name: Health gate the seeded image
-        if: steps.ver.outputs.publish == 'true'
-        env:
-          UNIFI_TEST_NETWORK_SEEDED_IMAGE: unifi-network:seedgate
-        run: |
-          docker buildx build --load --platform linux/amd64 \
-            --build-arg "BASE_IMAGE=$IMAGE@${{ steps.push.outputs.digest }}" \
-            -t unifi-network:seedgate network/seeded
-          uv run -p 3.13 --extra test \
-            pytest tests/integration -m integration -k seeded_variant
-
-      - name: Push seeded image (multi-arch, from the pushed base digest)
-        if: steps.ver.outputs.publish == 'true'
-        id: pushseeded
-        uses: docker/build-push-action@v6
+      - uses: actions/upload-artifact@v4
         with:
-          context: network/seeded
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ env.IMAGE }}:${{ steps.ver.outputs.push_seeded }}
-          build-args: |
-            BASE_IMAGE=${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+          name: seed
+          path: network/seeded/seed.tgz
+          retention-days: 1
+          if-no-files-found: error
+
+  seeded:
+    needs: [build, seed]
+    if: needs.build.outputs.publish == 'true'
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: seed
+          path: network/seeded
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build the seeded variant on this arch's staged base
+        run: |
+          docker build --build-arg "BASE_IMAGE=$STAGING:base-${{ matrix.arch }}" \
+            -t net:seeded network/seeded
+
+      # Natively, on both arches now. The baked admin authenticating is the
+      # variant's whole claim, and arm64 used to ship without anyone checking it.
+      - name: Health gate the seeded image (native)
+        env:
+          UNIFI_TEST_NETWORK_SEEDED_IMAGE: net:seeded
+        run: uv run -p 3.13 --extra test pytest tests/integration -m integration -k seeded_variant
+
+      - name: Push the gated image to the staging package
+        run: |
+          set -euo pipefail
+          docker tag net:seeded "$STAGING:seeded-${{ matrix.arch }}"
+          docker push "$STAGING:seeded-${{ matrix.arch }}"
+
+  manifest:
+    needs: [build, seeded]
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      # slide-tags points names at digests, so the stitched manifest-list digest
+      # has to come back out of the registry once each list exists.
+      - name: Stitch multi-arch tags from the staged per-arch images
+        id: stitch
+        run: |
+          set -euo pipefail
+          stitch() {   # stitch <variant> <published-tag>: create the list, print its digest
+            local digest
+            # >&2 because only the digest line may reach $GITHUB_OUTPUT.
+            docker buildx imagetools create -t "$IMAGE:$2" \
+              "$STAGING:$1-amd64" "$STAGING:$1-arm64" >&2
+            # An assignment, not an echo substitution: this has to fail the step
+            # rather than hand slide-tags an empty digest it would only skip.
+            digest=$(docker buildx imagetools inspect "$IMAGE:$2" \
+              --format '{{json .Manifest}}' \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["digest"])')
+            echo "$1=$digest"
+          }
+          {
+            stitch base   "${{ needs.build.outputs.push_base }}"
+            stitch sim    "${{ needs.build.outputs.push_sim }}"
+            stitch seeded "${{ needs.build.outputs.push_seeded }}"
+          } >> "$GITHUB_OUTPUT"
+
+      # The staging package is deleted below, so the published image has to be
+      # standing on its own copies by now. imagetools does copy cross-repository,
+      # but proving it here is the difference between deleting staging safely and
+      # deleting the images out from under the tags.
+      - name: Prove the published images do not depend on the staging package
+        env:
+          TAGS: >-
+            ${{ needs.build.outputs.push_base }}
+            ${{ needs.build.outputs.push_sim }}
+            ${{ needs.build.outputs.push_seeded }}
+        run: |
+          python3 - <<'PY'
+          import json, os, subprocess, sys
+
+          image = os.environ["IMAGE"]
+
+          def inspect(ref):
+              out = subprocess.run(
+                  ["docker", "buildx", "imagetools", "inspect", ref, "--raw"],
+                  capture_output=True, text=True,
+              )
+              if out.returncode != 0:
+                  sys.exit(f"{ref} does not resolve: {out.stderr.strip()[:200]}")
+              return json.loads(out.stdout)
+
+          for tag in os.environ["TAGS"].split():
+              children = [m["digest"] for m in inspect(f"{image}:{tag}").get("manifests", [])]
+              if not children:
+                  sys.exit(f"{image}:{tag} has no child manifests")
+              for digest in children:
+                  # Resolving by digest against the PUBLISHED repository is the
+                  # check: it succeeds only if the manifest was copied there.
+                  inspect(f"{image}@{digest}")
+              print(f"  {tag}: {len(children)} children resolve under the published package")
+          PY
 
       # Which tags move was decided by release-plan; this only applies it.
       - name: Move the sliding tags
-        if: steps.ver.outputs.publish == 'true'
         run: |
           uv run -p 3.13 unifi-containers slide-tags --image "$IMAGE" \
-            --tags "${{ steps.ver.outputs.globals }}" \
-            --base "${{ steps.push.outputs.digest }}" \
-            --sim "${{ steps.pushsim.outputs.digest }}" \
-            --seeded "${{ steps.pushseeded.outputs.digest }}"
+            --tags "${{ needs.build.outputs.globals }}" \
+            --base "${{ steps.stitch.outputs.base }}" \
+            --sim "${{ steps.stitch.outputs.sim }}" \
+            --seeded "${{ steps.stitch.outputs.seeded }}"
+
+      # Best effort, and last: the release is already complete and verified
+      # self-contained by here. A token without delete rights leaves a tidy-up
+      # job behind, not a broken release.
+      - name: Discard the staging package
+        if: always()
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --method DELETE /user/packages/container/unifi-network-staging \
+            && echo "staging package deleted" \
+            || echo "::warning::could not delete the staging package; it holds no published image"
