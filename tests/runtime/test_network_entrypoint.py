@@ -209,3 +209,35 @@ def test_vendor_paths_point_the_helper_at_the_volume():
         "UNIFI_LOG_DIR": "/unifi/log",
         "UNIFI_RUN_DIR": "/unifi/run",
     }
+
+
+def test_clearing_readiness_state_takes_the_session_with_the_marker(tmp_path):
+    """A restart must re-prove readiness from scratch, session included.
+
+    /tmp is the writable layer on this image, not a tmpfs, so `docker restart`
+    keeps whatever the last boot left. A surviving login marker would skip
+    authentication and leave the later stages probing with a cookie the
+    restarted controller has never issued.
+    """
+    state = [tmp_path / name for name in ("unifi-ready", "unifi-login-ready", "unifi-cookies")]
+    for path in state:
+        path.write_text("stale")
+
+    network.clear_readiness_state([str(p) for p in state])
+
+    assert not [p for p in state if p.exists()]
+
+
+def test_clearing_readiness_state_is_fine_when_nothing_is_there(tmp_path):
+    # The first boot of a fresh container, and every boot on UOS's tmpfs.
+    network.clear_readiness_state([str(tmp_path / "absent")])
+
+
+def test_the_cleared_set_is_everything_the_gate_writes():
+    """Named from the healthcheck rather than restated here: a marker added
+    there and forgotten here would survive the boot that proved it."""
+    from unifi_runtime import healthcheck
+
+    assert healthcheck.MARKER in healthcheck.BOOT_STATE
+    assert healthcheck.LOGIN_MARKER in healthcheck.BOOT_STATE
+    assert healthcheck.COOKIE_JAR in healthcheck.BOOT_STATE

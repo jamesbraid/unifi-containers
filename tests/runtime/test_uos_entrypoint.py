@@ -160,6 +160,7 @@ def test_every_shipped_unit_is_accounted_for():
         "uos-network-direct.socket",
         "uos-network-direct.service",
         "uos-seed-owner.service",
+        "uos-readyz.service",
     }
     for _, names in uos.UNIT_FLAGS:
         assert set(names) <= shipped

@@ -15,7 +15,7 @@ import subprocess
 import sys
 import time
 
-from .. import healthcheck, sysprops
+from .. import healthcheck, readyz, sysprops
 
 #: The deb's install prefix. Its data/logs/run entries are symlinks that the
 #: vendor helper maintains; everything persistent lives under /unifi.
@@ -186,19 +186,24 @@ def write_system_properties(path=SYSPROPS_PATH, settings=None):
 _HOOK_NAME_CHARS = frozenset(string.ascii_letters + string.digits + "_-")
 
 
-def clear_readiness_marker(marker=healthcheck.MARKER):
-    """Make this boot re-prove readiness.
+def clear_readiness_state(paths=healthcheck.BOOT_STATE):
+    """Make this boot re-prove readiness from scratch.
 
-    The marker turns the healthcheck into a file test once readiness is proven,
-    so it must not outlive the boot that proved it. Only UniFi OS mounts /tmp as
-    a tmpfs; here it is the container's writable layer, which `docker restart`
-    keeps — leaving a restarted controller healthy from its first probe, before
-    it can serve anything.
+    The markers turn the healthcheck into a file test once readiness is proven,
+    so none of them may outlive the boot that proved it. Only UniFi OS mounts
+    /tmp as a tmpfs; here it is the container's writable layer, which `docker
+    restart` keeps — leaving a restarted controller healthy from its first
+    probe, before it can serve anything.
+
+    The session goes with them. A surviving login marker would skip
+    authentication on the next boot and leave the later stages probing with a
+    cookie the restarted controller has never heard of.
     """
-    try:
-        os.remove(marker)
-    except OSError:
-        pass
+    for path in paths:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def run_hooks(directory=INIT_HOOKS):
@@ -404,7 +409,15 @@ def main(argv=None, env=None):
         os.execvp(argv[0], argv)
 
     os.umask(UMASK)
-    clear_readiness_marker()
+    clear_readiness_state()
+    # Directly after the state is cleared and before anything slow: a caller
+    # polling from second zero should get an honest 503, not a refused
+    # connection it has to tell apart from "wrong port". Starting it any earlier
+    # would risk serving the last boot's marker as this boot's verdict.
+    #
+    # A daemon thread, because this process stays PID 1 and supervises the JVM
+    # rather than exec'ing it, so the endpoint lives as long as the container.
+    readyz.start_configured(env)
     apply_vendor_paths(env)
     vendor_init()
     write_system_properties()

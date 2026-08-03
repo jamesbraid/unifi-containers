@@ -21,6 +21,7 @@ MODULES = (
     "unifi_runtime.unifi.ucore",
     "unifi_runtime.unifi.ulp",
     "unifi_runtime.healthcheck",
+    "unifi_runtime.readyz",
     "unifi_runtime.entrypoint.uos",
     "unifi_runtime.entrypoint.demo",
     "unifi_runtime.seed.uos_owner",
