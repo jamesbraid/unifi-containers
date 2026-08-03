@@ -37,6 +37,12 @@ LOGIN_MARKER = "/tmp/unifi-login-ready"
 #: on disk lets one login serve the later stages.
 COOKIE_JAR = "/tmp/unifi-cookies"
 
+#: Everything the gate writes, all of it scoped to a single boot. The network
+#: images keep /tmp on the writable layer, which `docker restart` preserves, so
+#: an entrypoint has to clear the whole set — leaving the login marker behind
+#: would skip authentication on the next boot and probe v2 with a dead session.
+BOOT_STATE = (MARKER, LOGIN_MARKER, COOKIE_JAR)
+
 DEFAULT_SITE = "default"
 
 PROBE_TIMEOUT = 5

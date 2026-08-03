@@ -11,6 +11,7 @@ import subprocess
 import sys
 from collections import OrderedDict, namedtuple
 
+from .. import readyz
 from ..env import SEED_DEFAULTS, is_enabled, setting
 
 INIT = "/sbin/init"
@@ -210,9 +211,16 @@ def ensure_uuid(env, path=UUID_FILE, source=RANDOM_UUID_SOURCE):
 UNIT_FLAGS = (
     ("UOS_NETWORK_DIRECT", ("uos-network-direct.socket",)),
     ("UOS_SEED_OWNER", ("uos-seed-owner.service",)),
+    ("UOS_READYZ", ("uos-readyz.service",)),
 )
 
 SEED_OWNER_ENV_PATH = "/run/uos-seed-owner.env"
+
+READYZ_ENV_PATH = "/run/uos-readyz.env"
+
+#: What the readyz unit needs from the container environment. Absent keys are
+#: left out so the module's own defaults apply.
+READYZ_KEYS = (readyz.PROBE_VAR, readyz.PORT_VAR)
 
 
 def _quote(value):
@@ -243,6 +251,22 @@ def write_seed_owner_env(env, path=SEED_OWNER_ENV_PATH):
     """
     with open(path, "w") as handle:
         handle.write(seed_owner_env(env))
+    return path
+
+
+def readyz_env(env):
+    """Resolve the readiness endpoint's settings into EnvironmentFile text."""
+    return "".join(f"{key}={_quote(env[key])}\n" for key in READYZ_KEYS if env.get(key))
+
+
+def write_readyz_env(env, path=READYZ_ENV_PATH):
+    """`docker run -e READYZ_PORT=...` reaches the unit through this file alone.
+
+    A unit inherits none of the container's environment, the same reason the
+    seed unit has one.
+    """
+    with open(path, "w") as handle:
+        handle.write(readyz_env(env))
     return path
 
 
@@ -339,6 +363,8 @@ def main(env=None):
     ensure_service_dirs()
     if is_enabled(env.get("UOS_SEED_OWNER")):
         write_seed_owner_env(env)
+    if is_enabled(env.get("UOS_READYZ")):
+        write_readyz_env(env)
     enable_units(env)
     run_init_hooks()
     start_log_tail(env)

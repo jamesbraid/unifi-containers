@@ -217,6 +217,11 @@ therefore sufficient — you should not need a readiness poll of your own:
   strategy, e.g. Go: `wait.ForHealthCheck()`; Java:
   `Wait.forHealthcheck()`. Container reuse across tests works well with the
   sim/seeded variants since state is deterministic.
+- **Anything holding only a URL**: `GET :9099/readyz` — **200** once ready,
+  **503** until then. Docker will not serve its health verdict over the
+  network, so a caller that did not start the container has no way to read
+  it. This does. It runs the same probe the healthcheck runs, so it is the
+  same verdict, not a second opinion.
 - **Startup budgets**, measured to healthy on Apple Silicon / native arm64:
   `unifi-network:sim` 39 s; `unifi-os-server` base 32 s, `-sim` 66 s,
   `-seeded` 78 s. Healthy now also waits for the v2 surface and the demo
@@ -231,6 +236,36 @@ therefore sufficient — you should not need a readiness poll of your own:
   [sysbox-runc](https://github.com/nestybox/sysbox) can run systemd
   containers without the explicit capability list — an option, not a
   requirement.
+
+### The readiness endpoint
+
+Some orchestrators start a container for you and hand back only a URL. CI
+services (Woodpecker, GitLab) do it, Kubernetes does it, and none of them can
+run `docker inspect`. Those callers used to reimplement readiness against an
+API they do not own — typically a login poll, which goes green before the v2
+surface and the demo fleet do.
+
+Every image serves the verdict instead:
+
+```bash
+curl -fsS http://localhost:9099/readyz     # 200 ready, 503 not yet
+until curl -fsS http://host:9099/readyz >/dev/null; do sleep 2; done
+```
+
+```yaml
+readinessProbe:                              # Kubernetes
+  httpGet: { path: /readyz, port: 9099 }
+  periodSeconds: 5
+  failureThreshold: 60
+```
+
+It answers 503 rather than refusing the connection from the moment the
+container starts, so "not ready yet" never has to be told apart from "wrong
+host". Poll it as fast as you like: the probe underneath runs at most once
+every two seconds however many callers ask, because its first stage is a
+login and UniFi rate-limits those globally.
+
+Set `READYZ_PORT` to move it, `READYZ_DISABLE=true` to switch it off.
 
 `ghcr.io/jamesbraid/unifi-os-server` runs the full UOS stack with systemd
 as PID 1, which needs an explicit runtime contract — capability list (no

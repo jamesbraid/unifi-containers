@@ -20,6 +20,9 @@ FROM ${BASE_IMAGE}
 # /usr/local/unifi/init.d, not /unifi/init.d: the base image declares
 # /unifi as a VOLUME, so anything COPY'd under it after that declaration
 # is silently discarded at runtime.
+# The readiness endpoint reports this variant's gate, not the base image's.
+ENV READYZ_PROBE=network-sim
+
 COPY demo-mode /usr/local/unifi/init.d/demo-mode
 RUN chmod 755 /usr/local/unifi/init.d/demo-mode
 

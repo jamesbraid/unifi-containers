@@ -21,7 +21,8 @@ FROM ${BASE_IMAGE}
 # This variant always wants the direct port, so it is enabled here rather than
 # left to the entrypoint. The env flag stays set so `docker inspect` still shows
 # which knob this variant has turned on.
-ENV UOS_NETWORK_DIRECT=true
+ENV UOS_NETWORK_DIRECT=true \
+    READYZ_PROBE=sim
 RUN systemctl enable uos-network-direct.socket
 
 COPY demo-mode /usr/local/uos/init.d/demo-mode
