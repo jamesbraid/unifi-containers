@@ -15,5 +15,7 @@ FROM ${BASE_IMAGE}
 ADD seed.tgz /unifi/
 RUN chown -R unifi:unifi /unifi
 
+ENV READYZ_PROBE=network-seeded
+
 HEALTHCHECK --interval=10s --timeout=20s --start-period=5m --retries=5 \
   CMD ["/usr/bin/python3", "-m", "unifi_runtime.healthcheck", "network-seeded"]

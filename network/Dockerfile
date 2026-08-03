@@ -26,7 +26,8 @@ LABEL org.opencontainers.image.source="https://github.com/jamesbraid/unifi-conta
 # only in the entrypoint. Bytecode writing is off: the package is read-only
 # in practice and .pyc files would only bloat the layer.
 ENV PYTHONPATH=/usr/local/lib/unifi-containers \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    READYZ_PROBE=network
 
 RUN mkdir -p /usr/local/unifi/init.d
 COPY src/unifi_runtime /usr/local/lib/unifi-containers/unifi_runtime
@@ -43,7 +44,11 @@ RUN set -ex \
 
 VOLUME ["/unifi", "/unifi/run"]
 
-EXPOSE 6789/tcp 8080/tcp 8443/tcp 8880/tcp 8843/tcp 3478/udp 10001/udp
+# 9099 is the readiness endpoint (unifi_runtime.readyz), not the controller's.
+# It answers GET /readyz for callers that hold only a URL and so cannot read
+# this image's HEALTHCHECK — a CI service container, a Kubernetes
+# readinessProbe, a curl loop.
+EXPOSE 6789/tcp 8080/tcp 8443/tcp 8880/tcp 8843/tcp 9099/tcp 3478/udp 10001/udp
 
 WORKDIR /unifi
 
