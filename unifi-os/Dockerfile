@@ -35,7 +35,9 @@ ENV APP_MODEL=UOSSERVER \
     PRODUCT_NAME=uosserver \
     APP_VERSION=${UOS_VERSION} \
     PYTHONPATH=/usr/local/lib/unifi-containers \
-    PYTHONDONTWRITEBYTECODE=1
+    PYTHONDONTWRITEBYTECODE=1 \
+    UOS_READYZ=true \
+    READYZ_PROBE=uos
 
 RUN mkdir -p /usr/local/uos/init.d
 COPY src/unifi_runtime /usr/local/lib/unifi-containers/unifi_runtime
@@ -57,7 +59,10 @@ VOLUME ["/unifi"]
 # 443 GUI/API (ucore via nginx), 8080 device inform, 7443 the opt-in
 # direct (SSO-free) Network API port (UOS_NETWORK_DIRECT=true; the sim
 # variant enables it), 3478/udp STUN, 10003/udp discovery.
-EXPOSE 443/tcp 8080/tcp 7443/tcp 3478/udp 10003/udp
+# 9099 is the readiness endpoint (unifi_runtime.readyz), served by
+# uos-readyz.service for callers that hold only a URL and so cannot read this
+# image's HEALTHCHECK.
+EXPOSE 443/tcp 8080/tcp 7443/tcp 9099/tcp 3478/udp 10003/udp
 
 HEALTHCHECK --interval=10s --timeout=8s --start-period=10m --retries=6 \
   CMD ["/usr/bin/python3", "-m", "unifi_runtime.healthcheck", "uos"]

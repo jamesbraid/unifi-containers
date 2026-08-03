@@ -1,0 +1,25 @@
+# The endpoint runs as a unit rather than a thread in the entrypoint, because
+# that process execs /sbin/init and nothing of it survives the handoff.
+#
+# A systemd unit inherits nothing from the container environment, which is why
+# PYTHONPATH is spelled out here and why READYZ_PROBE arrives as an
+# EnvironmentFile the entrypoint writes.
+#
+# Started early and deliberately not ordered after unifi-core: answering 503
+# while the console boots is the endpoint's job, and waiting for the thing it
+# reports on would leave a caller unable to tell "not ready" from "not
+# listening".
+[Unit]
+Description=Serve the readiness verdict over HTTP (test target)
+
+[Service]
+Environment=PYTHONPATH=/usr/local/lib/unifi-containers
+EnvironmentFile=-/run/uos-readyz.env
+ExecStart=/usr/bin/python3 -m unifi_runtime.readyz
+Restart=on-failure
+RestartSec=2
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

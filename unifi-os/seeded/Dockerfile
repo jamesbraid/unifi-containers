@@ -31,7 +31,8 @@ FROM ${BASE_IMAGE}
 # The two flags that make this variant what it is. Kept as ENV so the seed unit
 # and the healthcheck read the same values, and `docker inspect` shows them.
 ENV UOS_SEED_OWNER=true \
-    UOS_SEED_API_KEY=true
+    UOS_SEED_API_KEY=true \
+    READYZ_PROBE=seeded
 
 # This variant always seeds, so the unit is enabled at build time.
 RUN systemctl enable uos-seed-owner.service
