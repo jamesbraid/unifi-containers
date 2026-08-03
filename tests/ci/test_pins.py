@@ -6,18 +6,37 @@ for a version bump and cutting a rebuild instead would publish the old
 version under a new revision.
 """
 
+import re
+
 import pytest
 from conftest import REPO_ROOT
 
 from unifi_containers import pins
 
+VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+
+
+# The two tests below assert shape and provenance, never the version itself.
+# Asserting the literal made every bump PR red by construction: the update lane
+# exists to move these pins, nothing keeps a hardcoded copy in step, and the
+# lane's own PR then failed the suite until someone hand-edited this file.
+# Resist restoring the literal. What these guards owe the release lanes is that
+# the reader finds a real version in the right file — `cut-release` reads None
+# as "nothing to release" and skips in silence, so None is the failure that
+# matters. `verify-pins` is what checks the value.
+
 
 def test_reads_the_real_network_pin():
-    assert pins.pinned_version("network", REPO_ROOT) == "10.4.57"
+    version = pins.pinned_version("network", REPO_ROOT)
+    assert version and VERSION.match(version)
+    # From the Network Dockerfile's PKGURL, not some other product's pin.
+    assert f"/unifi/{version}/" in (REPO_ROOT / pins.NETWORK_DOCKERFILE).read_text()
 
 
 def test_reads_the_real_uos_pin():
-    assert pins.pinned_version("unifi-os", REPO_ROOT) == "5.1.21"
+    version = pins.pinned_version("unifi-os", REPO_ROOT)
+    assert version and VERSION.match(version)
+    assert f"{pins.UOS_KEY}={version}" in (REPO_ROOT / pins.UOS_PINS).read_text()
 
 
 def test_an_unknown_product_raises_rather_than_returning_none():
