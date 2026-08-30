@@ -357,6 +357,12 @@ def main(env=None):
     write_stamp(
         "/usr/lib/version", version_stamp(env.get("APP_MODEL", ""), env.get("APP_VERSION", ""))
     )
+    # Both spellings of the model, because ubnt-tools changed sources between
+    # releases: 5.1.21 parsed the model out of /usr/lib/version's first field,
+    # 5.1.37 reads /usr/lib/app_model outright. An empty model is fatal as of
+    # unifi-core 5.1.132 ("Unsupported console model"), which crash-loops and
+    # never serves :443.
+    write_stamp("/usr/lib/app_model", env.get("APP_MODEL", ""))
     write_stamp("/usr/lib/product_name", env.get("PRODUCT_NAME", ""))
 
     ensure_eth0_alias()
