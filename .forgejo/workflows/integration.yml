@@ -1,0 +1,93 @@
+# Pre-merge integration: build the images and boot them, on Forgejo, so a
+# broken bump can no longer land on main and fail only after merge on the
+# GitHub mirror. Measured on this runner before writing this file: a
+# skunkworks-docker job's guest docker boots the full UOS systemd contract
+# (cap list, host cgroupns, /sys/fs/cgroup rw) to healthy.
+#
+# amd64 only — the skunkworks guests are amd64. The arm64 boots stay on the
+# GitHub release workflows' native arm64 runners.
+#
+# This directory existing means Forgejo ignores .github/workflows entirely,
+# which is the point: those are the mirror's release automation, not ours.
+name: integration
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  unifi-os:
+    runs-on: skunkworks-docker
+    container:
+      image: ghcr.io/astral-sh/uv:python3.13-bookworm
+    steps:
+      - uses: actions/checkout@v4
+
+      # The guest's docker socket is mounted into job containers; only the
+      # client is missing from the uv image. Static build, client binary only.
+      - name: Install the docker client
+        run: |
+          curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
+            | tar -xz --strip-components=1 -C /usr/local/bin docker/docker
+          docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
+
+      - name: Extract UOS base image (pinned + sha256-verified)
+        run: uv run -p 3.13 unifi-containers extract-uos amd64
+
+      - name: Build base, sim and seeded images
+        run: |
+          . ./unifi-os/pins.env
+          docker build -f unifi-os/Dockerfile --build-arg UOS_VERSION="$UOS_VERSION" -t unifi-os-server:ci .
+          docker build --build-arg BASE_IMAGE=unifi-os-server:ci -t unifi-os-server:ci-sim unifi-os/sim/
+          docker build --build-arg BASE_IMAGE=unifi-os-server:ci -t unifi-os-server:ci-seeded unifi-os/seeded/
+
+      - name: Shipped package imports on the image's own interpreter
+        run: docker run --rm --entrypoint /usr/bin/python3 unifi-os-server:ci -m unifi_runtime.selfcheck
+
+      - name: Vendor tooling can read the stamps
+        run: docker run --rm --entrypoint /usr/bin/python3 unifi-os-server:ci -m unifi_runtime.vendorcheck
+
+      - name: Integration suite against the images just built
+        env:
+          UNIFI_TEST_UOS_IMAGE: unifi-os-server:ci
+          UNIFI_TEST_UOS_SIM_IMAGE: unifi-os-server:ci-sim
+          UNIFI_TEST_UOS_SEEDED_IMAGE: unifi-os-server:ci-seeded
+          CI: "true"
+        run: uv run -p 3.13 --extra test pytest tests/integration -m integration -k uos
+
+      - name: Leave the guest clean
+        if: always()
+        run: docker image rm -f unifi-os-server:ci unifi-os-server:ci-sim unifi-os-server:ci-seeded uos-base:local || true
+
+  network:
+    runs-on: skunkworks-docker
+    container:
+      image: ghcr.io/astral-sh/uv:python3.13-bookworm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the docker client
+        run: |
+          curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
+            | tar -xz --strip-components=1 -C /usr/local/bin docker/docker
+
+      # No seeded build here, matching the GitHub build lane: the seeded
+      # variant is minted at release time by the seed job.
+      - name: Build base and sim images
+        run: |
+          docker build -f network/Dockerfile -t unifi-network:ci .
+          docker build --build-arg BASE_IMAGE=unifi-network:ci -t unifi-network:ci-sim network/sim/
+
+      - name: Shipped package imports on the image's own interpreter
+        run: docker run --rm --entrypoint /usr/bin/python3 unifi-network:ci -m unifi_runtime.selfcheck
+
+      - name: Integration suite against the images just built
+        env:
+          UNIFI_TEST_NETWORK_IMAGE: unifi-network:ci
+          UNIFI_TEST_NETWORK_SIM_IMAGE: unifi-network:ci-sim
+          CI: "true"
+        run: uv run -p 3.13 --extra test pytest tests/integration -m integration -k "network and not seeded"
+
+      - name: Leave the guest clean
+        if: always()
+        run: docker image rm -f unifi-network:ci unifi-network:ci-sim || true

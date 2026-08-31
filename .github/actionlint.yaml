@@ -1,0 +1,4 @@
+# Labels that are not GitHub-hosted runners: the Forgejo Actions fleet.
+self-hosted-runner:
+  labels:
+    - skunkworks-docker
