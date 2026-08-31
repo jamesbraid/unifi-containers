@@ -276,3 +276,24 @@ jobs:
           gh api --method DELETE /user/packages/container/unifi-network-staging \
             && echo "staging package deleted" \
             || echo "::warning::could not delete the staging package; it holds no published image"
+
+  # A red run must page, not wait to be discovered: the 5.1.37 release
+  # failure sat unnoticed for nine days until a consumer tripped over it.
+  # Harmless while the PUSHOVER_* secrets are unset — the step says so and
+  # exits clean.
+  notify-failure:
+    needs: [build, seed, seeded, manifest]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          USER: ${{ secrets.PUSHOVER_USER }}
+          LINK: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: ${{ github.workflow }} failed
+          BODY: ${{ github.repository }} ${{ github.ref_name }}
+        run: |
+          [ -n "$TOKEN" ] || { echo "PUSHOVER_TOKEN unset; not notifying"; exit 0; }
+          curl -fsS --form-string "token=$TOKEN" --form-string "user=$USER" \
+            --form-string "title=$TITLE" --form-string "message=$BODY $LINK" \
+            https://api.pushover.net/1/messages.json
