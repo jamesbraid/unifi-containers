@@ -74,3 +74,24 @@ jobs:
           UNIFI_TEST_NETWORK_IMAGE: unifi-network:ci
           UNIFI_TEST_NETWORK_SIM_IMAGE: unifi-network:ci-sim
         run: uv run -p 3.13 --extra test pytest tests/integration -m integration -k "network and not seeded"
+
+  # A red run must page, not wait to be discovered: the 5.1.37 release
+  # failure sat unnoticed for nine days until a consumer tripped over it.
+  # Harmless while the PUSHOVER_* secrets are unset — the step says so and
+  # exits clean.
+  notify-failure:
+    needs: [build-test]
+    if: failure() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          USER: ${{ secrets.PUSHOVER_USER }}
+          LINK: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: ${{ github.workflow }} failed
+          BODY: ${{ github.repository }} ${{ github.ref_name }}
+        run: |
+          [ -n "$TOKEN" ] || { echo "PUSHOVER_TOKEN unset; not notifying"; exit 0; }
+          curl -fsS --form-string "token=$TOKEN" --form-string "user=$USER" \
+            --form-string "title=$TITLE" --form-string "message=$BODY $LINK" \
+            https://api.pushover.net/1/messages.json

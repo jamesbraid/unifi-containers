@@ -27,6 +27,7 @@ MODULES = (
     "unifi_runtime.seed.uos_owner",
     "unifi_runtime.seed.network_wizard",
     "unifi_runtime.entrypoint.network",
+    "unifi_runtime.vendorcheck",
 )
 
 
