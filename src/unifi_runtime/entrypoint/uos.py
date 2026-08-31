@@ -364,6 +364,19 @@ def start_log_tail(env, logs=TAILED_LOGS):
     """Surface key service logs in `docker logs`; the child keeps our stdout across execv."""
     if env.get("FORWARD_SERVICE_LOGS", "1") == "0":
         return None
+    # Warnings and errors from every unit, not just the files above: a unit
+    # that dies before it opens its log file only ever speaks to the journal —
+    # unifi-core's 5.1.37 crash produced literally nothing in the tailed set.
+    # The retry loop exists because this starts before journald does, and
+    # journalctl -f gives up when there is no journal yet rather than waiting.
+    subprocess.Popen(
+        [
+            "sh",
+            "-c",
+            "while true; do journalctl -f -p warning --no-pager 2>/dev/null; sleep 5; done",
+        ],
+        stderr=subprocess.DEVNULL,
+    )
     return subprocess.Popen(["tail", "-F", "-n0", *logs], stderr=subprocess.DEVNULL)
 
 
