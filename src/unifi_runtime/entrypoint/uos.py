@@ -303,6 +303,26 @@ def write_stamp(path, value):
         handle.write(value + "\n")
 
 
+def write_stamps(env, root="/"):
+    """Every identity stamp the vendor's tooling reads, written before systemd.
+
+    Both spellings of the model, because ubnt-tools changed sources between
+    releases: 5.1.21 parsed the model out of /usr/lib/version's first field,
+    5.1.37 reads /usr/lib/app_model outright. An empty model is fatal as of
+    unifi-core 5.1.132 ("Unsupported console model"), which crash-loops and
+    never serves :443. vendorcheck proves this set still satisfies the image's
+    own ubnt-tools at build time.
+    """
+    prefix = "" if root == "/" else str(root).rstrip("/")
+    write_stamp(prefix + "/usr/lib/platform", firmware_platform(detect_arch()))
+    write_stamp(
+        prefix + "/usr/lib/version",
+        version_stamp(env.get("APP_MODEL", ""), env.get("APP_VERSION", "")),
+    )
+    write_stamp(prefix + "/usr/lib/app_model", env.get("APP_MODEL", ""))
+    write_stamp(prefix + "/usr/lib/product_name", env.get("PRODUCT_NAME", ""))
+
+
 def ensure_eth0_alias():
     """Give setups that provide tap0 an eth0 the services will accept."""
     if os.path.isdir("/sys/devices/virtual/net/eth0"):
@@ -352,18 +372,7 @@ def main(env=None):
 
     apply_symlinks(plan_symlinks())
     ensure_uuid(env)
-
-    write_stamp("/usr/lib/platform", firmware_platform(detect_arch()))
-    write_stamp(
-        "/usr/lib/version", version_stamp(env.get("APP_MODEL", ""), env.get("APP_VERSION", ""))
-    )
-    # Both spellings of the model, because ubnt-tools changed sources between
-    # releases: 5.1.21 parsed the model out of /usr/lib/version's first field,
-    # 5.1.37 reads /usr/lib/app_model outright. An empty model is fatal as of
-    # unifi-core 5.1.132 ("Unsupported console model"), which crash-loops and
-    # never serves :443.
-    write_stamp("/usr/lib/app_model", env.get("APP_MODEL", ""))
-    write_stamp("/usr/lib/product_name", env.get("PRODUCT_NAME", ""))
+    write_stamps(env)
 
     ensure_eth0_alias()
     ensure_service_dirs()
