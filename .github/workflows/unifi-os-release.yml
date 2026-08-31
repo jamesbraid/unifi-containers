@@ -94,6 +94,13 @@ jobs:
         if: steps.ver.outputs.publish == 'true'
         run: docker run --rm --entrypoint /usr/bin/python3 uos:base -m unifi_runtime.selfcheck
 
+      # Same drift check as the build workflow: ubnt-tools has moved its model
+      # source between UOS releases; fail here in seconds, with the filename,
+      # not in the boot suite half an hour in.
+      - name: Vendor tooling can read the stamps
+        if: steps.ver.outputs.publish == 'true'
+        run: docker run --rm --entrypoint /usr/bin/python3 uos:base -m unifi_runtime.vendorcheck
+
       # Native, on this arch's own runner: an arm64 image is booted on an arm64
       # machine rather than trusted. The suite boots each variant under the
       # documented runtime contract and tears it down even when an assertion
@@ -222,3 +229,24 @@ jobs:
           gh api --method DELETE /user/packages/container/unifi-os-server-staging \
             && echo "staging package deleted" \
             || echo "::warning::could not delete the staging package; it holds no published image"
+
+  # A red run must page, not wait to be discovered: the 5.1.37 release
+  # failure sat unnoticed for nine days until a consumer tripped over it.
+  # Harmless while the PUSHOVER_* secrets are unset — the step says so and
+  # exits clean.
+  notify-failure:
+    needs: [build, manifest]
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          USER: ${{ secrets.PUSHOVER_USER }}
+          LINK: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TITLE: ${{ github.workflow }} failed
+          BODY: ${{ github.repository }} ${{ github.ref_name }}
+        run: |
+          [ -n "$TOKEN" ] || { echo "PUSHOVER_TOKEN unset; not notifying"; exit 0; }
+          curl -fsS --form-string "token=$TOKEN" --form-string "user=$USER" \
+            --form-string "title=$TITLE" --form-string "message=$BODY $LINK" \
+            https://api.pushover.net/1/messages.json
