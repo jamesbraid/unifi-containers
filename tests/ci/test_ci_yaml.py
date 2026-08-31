@@ -16,6 +16,7 @@ from conftest import REPO_ROOT
 CI_FILES = sorted(
     [
         *(REPO_ROOT / ".github" / "workflows").glob("*.yml"),
+        *(REPO_ROOT / ".forgejo" / "workflows").glob("*.yml"),
         *(REPO_ROOT / ".woodpecker").glob("*.yml"),
     ]
 )

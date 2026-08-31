@@ -1,0 +1,53 @@
+# The fast checks, ported verbatim from .woodpecker/checks.yml so tests and
+# lint run on the same CI as the integration suite. Runs on the general
+# runner (no docker needed) and leaves the skunkworks fleet to the boot jobs.
+name: checks
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          cp "$HOME/.local/bin/uv" /usr/local/bin/uv
+
+      # Two interpreters because the two packages carry different obligations:
+      # unifi_runtime is COPY'd into an image running Debian's python 3.9.2
+      # with no pip, so tests/runtime must pass there. Everything else is CI
+      # tooling on 3.13.
+      - name: Runtime tests on python 3.9
+        run: uv run -p 3.9 --no-project --with-requirements tests/runtime/requirements.txt pytest tests/runtime
+
+      - name: Full suite on python 3.13
+        run: uv run -p 3.13 --extra test --extra dev pytest
+
+      # The `dev` extra, not `uvx`: ruff comes from the lockfile, so CI and a
+      # laptop cannot disagree about which version decided the diff.
+      - name: Lint and formatting
+        run: |
+          uv run -p 3.13 --extra dev ruff check .
+          uv run -p 3.13 --extra dev ruff format --check .
+
+      # yaml.safe_load silently keeps the last of a duplicate key; GitHub
+      # rejects the file outright. A duplicate `if:` would fail every release,
+      # and nothing else in this pipeline could see it.
+      - name: Workflow lint
+        run: |
+          curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz \
+            | tar -xz -C /usr/local/bin actionlint
+          actionlint .github/workflows/*.yml .forgejo/workflows/*.yml
+
+      - name: Types
+        run: uv run -p 3.13 --extra dev mypy src/
+
+      # Format and reachability only. Monotonicity is enforced where bumps are
+      # SELECTED, against the external channel authorities.
+      - name: Verify pins
+        run: uv run -p 3.13 unifi-containers verify-pins
