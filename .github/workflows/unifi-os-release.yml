@@ -94,6 +94,13 @@ jobs:
         if: steps.ver.outputs.publish == 'true'
         run: docker run --rm --entrypoint /usr/bin/python3 uos:base -m unifi_runtime.selfcheck
 
+      # Same drift check as the build workflow: ubnt-tools has moved its model
+      # source between UOS releases; fail here in seconds, with the filename,
+      # not in the boot suite half an hour in.
+      - name: Vendor tooling can read the stamps
+        if: steps.ver.outputs.publish == 'true'
+        run: docker run --rm --entrypoint /usr/bin/python3 uos:base -m unifi_runtime.vendorcheck
+
       # Native, on this arch's own runner: an arm64 image is booted on an arm64
       # machine rather than trusted. The suite boots each variant under the
       # documented runtime contract and tears it down even when an assertion

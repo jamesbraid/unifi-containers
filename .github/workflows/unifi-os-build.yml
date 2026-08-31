@@ -68,6 +68,14 @@ jobs:
       - name: Shipped package imports on the image's own interpreter
         run: docker run --rm --entrypoint /usr/bin/python3 unifi-os-server:ci -m unifi_runtime.selfcheck
 
+      # The entrypoint feeds an undocumented vendor interface — the files
+      # ubnt-tools reads — and Ubiquiti moves it between releases (5.1.21 read
+      # /usr/lib/version, 5.1.37 reads /usr/lib/app_model). This fails in
+      # seconds and names the file; without it the drift surfaces as an
+      # integration boot timing out half an hour later with empty logs.
+      - name: Vendor tooling can read the stamps
+        run: docker run --rm --entrypoint /usr/bin/python3 unifi-os-server:ci -m unifi_runtime.vendorcheck
+
       # One step, and the fixtures tear their containers down even when an
       # assertion fails -- which the previous boot/wait/assert/rm sequence could
       # not, because `docker rm -f` was its own step and got skipped.
