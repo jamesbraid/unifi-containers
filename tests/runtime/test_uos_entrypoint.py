@@ -161,6 +161,10 @@ def test_every_shipped_unit_is_accounted_for():
         "uos-network-direct.service",
         "uos-seed-owner.service",
         "uos-readyz.service",
+        # Not a unit: a drop-in for the stock journald unit, always in effect —
+        # without it journald dies 218/CAPABILITIES under the cap contract and
+        # every unit's stdout/stderr is lost.
+        "systemd-journald.service.d",
     }
     for _, names in uos.UNIT_FLAGS:
         assert set(names) <= shipped

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import io
 import os
+import sys
 import tarfile
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -135,12 +136,47 @@ def network_container(image: str, *ports: int) -> DockerContainer:
     return container
 
 
+def dump_boot_diagnostics(container: DockerContainer) -> None:
+    """Whatever the never-healthy container can still tell us, to stderr.
+
+    A wait timeout used to surface as "unhealthy, Output: " and nothing else —
+    the 5.1.37 regression sat undiagnosed for nine days behind exactly that.
+    Best effort throughout: the container may be dead, or not a systemd image.
+    """
+    try:
+        wrapped = container.get_wrapped_container()
+    except Exception:
+        print("boot diagnostics: container never materialized", file=sys.stderr)
+        return
+    print(f"boot diagnostics for {wrapped.image}:", file=sys.stderr)
+    try:
+        print(wrapped.logs(tail=40).decode(errors="replace"), file=sys.stderr)
+    except Exception as exc:  # noqa: BLE001 - diagnostics never mask the real failure
+        print(f"docker logs unavailable: {exc}", file=sys.stderr)
+    for label, cmd in (
+        ("failed units", ["systemctl", "--failed", "--no-legend"]),
+        ("journal tail", ["journalctl", "-p", "warning", "-n", "30", "--no-pager"]),
+    ):
+        try:
+            code, output = wrapped.exec_run(cmd)
+            print(f"--- {label} (rc={code})", file=sys.stderr)
+            print(output.decode(errors="replace").strip(), file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001
+            print(f"--- {label}: exec failed: {exc}", file=sys.stderr)
+
+
 @contextmanager
 def booted(container: DockerContainer, timeout: int) -> Iterator[DockerContainer]:
     """Start `container`, wait for its own healthcheck, and always tear it down."""
     container.waiting_for(HealthcheckWaitStrategy().with_startup_timeout(timeout))
-    with container as running:
-        yield running
+    try:
+        with container as running:
+            yield running
+    except RuntimeError:
+        # The wait strategy's verdict, not a test assertion: grab evidence
+        # from the container before the context manager tears it down.
+        dump_boot_diagnostics(container)
+        raise
 
 
 def restart(container: DockerContainer, timeout: int) -> None:
