@@ -17,19 +17,23 @@ on:
 
 jobs:
   unifi-os:
+    # Default job image, no container override: the runner executes actions
+    # with the job image's own node, so actions/checkout only works where node
+    # exists (measured — checkout dies in a node-less image). uv and the
+    # docker client are a curl each.
     runs-on: skunkworks-docker
-    container:
-      image: ghcr.io/astral-sh/uv:python3.13-bookworm
     steps:
       - uses: actions/checkout@v4
 
-      # The guest's docker socket is mounted into job containers; only the
-      # client is missing from the uv image. Static build, client binary only.
-      - name: Install the docker client
+      # The guest's docker socket is mounted into every job; only the client
+      # and uv are missing from the default image.
+      - name: Install the docker client and uv
         run: |
           curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
             | tar -xz --strip-components=1 -C /usr/local/bin docker/docker
           docker version --format 'client={{.Client.Version}} server={{.Server.Version}}'
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          cp "$HOME/.local/bin/uv" /usr/local/bin/uv
 
       - name: Extract UOS base image (pinned + sha256-verified)
         run: uv run -p 3.13 unifi-containers extract-uos amd64
@@ -60,16 +64,20 @@ jobs:
         run: docker image rm -f unifi-os-server:ci unifi-os-server:ci-sim unifi-os-server:ci-seeded uos-base:local || true
 
   network:
+    # Default job image, no container override: the runner executes actions
+    # with the job image's own node, so actions/checkout only works where node
+    # exists (measured — checkout dies in a node-less image). uv and the
+    # docker client are a curl each.
     runs-on: skunkworks-docker
-    container:
-      image: ghcr.io/astral-sh/uv:python3.13-bookworm
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install the docker client
+      - name: Install the docker client and uv
         run: |
           curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
             | tar -xz --strip-components=1 -C /usr/local/bin docker/docker
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          cp "$HOME/.local/bin/uv" /usr/local/bin/uv
 
       # No seeded build here, matching the GitHub build lane: the seeded
       # variant is minted at release time by the seed job.
