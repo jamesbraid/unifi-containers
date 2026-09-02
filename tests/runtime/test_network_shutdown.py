@@ -48,11 +48,23 @@ def supervisor(tmp_path, argv, budget=2.0):
 
 
 def alive(pid):
+    """Really running — a zombie counts as dead.
+
+    Signal 0 still succeeds against a zombie, and in a CI job container
+    nothing sits at PID 1 reaping orphans, so a killed grandchild stays a
+    zombie for the rest of the job. These tests assert the kill was
+    delivered, not that someone collected the corpse.
+    """
     try:
         os.kill(pid, 0)
     except OSError:
         return False
-    return True
+    try:
+        with open(f"/proc/{pid}/stat") as handle:
+            return handle.read().rsplit(") ", 1)[1][0] != "Z"
+    except (OSError, IndexError):
+        # No /proc (macOS): signal 0 answered, and local runs have a reaper.
+        return True
 
 
 def assert_dies(pid):
