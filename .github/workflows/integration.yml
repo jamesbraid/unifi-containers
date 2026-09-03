@@ -7,8 +7,9 @@
 # amd64 only — the skunkworks guests are amd64. The arm64 boots stay on the
 # GitHub release workflows' native arm64 runners.
 #
-# This directory existing means Forgejo ignores .github/workflows entirely,
-# which is the point: those are the mirror's release automation, not ours.
+# Forge only: on the GitHub mirror both jobs skip on the server guard — the
+# mirror's job is release publishing, and one workflow directory serves both
+# servers (repo-wide rule; a second directory silently disables this one).
 name: integration
 on:
   pull_request:
@@ -17,6 +18,7 @@ on:
 
 jobs:
   unifi-os:
+    if: github.server_url != 'https://github.com'
     # Default job image, no container override: the runner executes actions
     # with the job image's own node, so actions/checkout only works where node
     # exists (measured — checkout dies in a node-less image). uv and the
@@ -65,6 +67,7 @@ jobs:
         run: docker image rm -f unifi-os-server:ci unifi-os-server:ci-sim unifi-os-server:ci-seeded uos-base:local || true
 
   network:
+    if: github.server_url != 'https://github.com'
     # Default job image, no container override: the runner executes actions
     # with the job image's own node, so actions/checkout only works where node
     # exists (measured — checkout dies in a node-less image). uv and the
