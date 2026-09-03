@@ -31,6 +31,21 @@ def env_values(text):
     return dict(dotenv_values(stream=io.StringIO(text or "")))
 
 
+def pin_file(product):
+    """The repo-relative file whose content IS the product's pins, or None.
+
+    None for network on purpose: its pins live inside the Dockerfile, where a
+    comment edit is not a release. unifi-os keeps pins in a dedicated env file,
+    so "the file changed" and "the pins changed" are the same statement — which
+    is what lets an app-only bump cut the next build without a manual rebuild.
+    """
+    if product == "network":
+        return None
+    if product == "unifi-os":
+        return UOS_PINS
+    raise ValueError(f"unknown product: {product!r}")
+
+
 def pinned_version(product, repo_root="."):
     """The version `product` pins on disk, or None. Raises for an unknown product."""
     root = Path(repo_root)

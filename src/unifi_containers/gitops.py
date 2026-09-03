@@ -171,3 +171,19 @@ def push(url, refspec, token=None, force=False, repo=None):
             f"git push {refspec} -> the remote reported no update for it, so "
             f"there is no evidence the ref moved"
         )
+
+
+def file_at(repo, ref, path):
+    """The blob content of `path` at `ref` (a tag or branch name), or None.
+
+    None covers both a missing file and an unknown ref: the caller compares
+    this against the working tree to ask "did the pins change since that
+    release", and either kind of absence means "no comparison possible", which
+    must read as changed rather than crash a release decision.
+    """
+    try:
+        commit = repo.revparse_single(ref).peel(pygit2.Commit)
+        blob = commit.tree / path
+    except (KeyError, ValueError, pygit2.GitError):
+        return None
+    return blob.data.decode()

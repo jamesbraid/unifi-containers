@@ -221,3 +221,28 @@ def test_the_plan_refuses_a_retired_rc_tag():
     # left over from that era must be refused rather than read as build 1.
     with pytest.raises(ValueError, match="not a release tag"):
         plan_script.plan("network/10.5.67-rc-1", [], pinned_lookup=pinned)
+
+
+def test_changed_pins_cut_the_next_build_without_a_rebuild_flag():
+    # The bundled app moved under an unchanged UOS version: the pins differ
+    # from what the newest release tag was cut from, so the next build is due.
+    rel, reason = cut.decide(
+        "unifi-os", "5.1.37", ["unifi-os/5.1.37-3"], pins_changed_since=lambda tag: True
+    )
+    assert rel.git_tag == "unifi-os/5.1.37-4"
+    assert "changed since unifi-os/5.1.37-3" in reason
+
+
+def test_unchanged_pins_still_require_a_deliberate_rebuild():
+    rel, reason = cut.decide(
+        "unifi-os", "5.1.37", ["unifi-os/5.1.37-3"], pins_changed_since=lambda tag: False
+    )
+    assert rel is None
+    assert "--rebuild" in reason
+
+
+def test_pin_file_is_the_env_file_for_uos_and_nothing_for_network():
+    from unifi_containers import pins
+
+    assert pins.pin_file("unifi-os") == "unifi-os/pins.env"
+    assert pins.pin_file("network") is None
