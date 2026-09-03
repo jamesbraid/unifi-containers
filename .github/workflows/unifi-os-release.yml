@@ -84,8 +84,10 @@ jobs:
       - name: Build base, sim, and seeded images
         if: steps.ver.outputs.publish == 'true'
         run: |
+          . ./unifi-os/pins.env
           docker build -f unifi-os/Dockerfile \
             --build-arg UOS_VERSION="${{ steps.ver.outputs.build }}" \
+            --build-arg UOS_APP_VERSION="$UOS_APP_VERSION" \
             --build-arg REVISION="${GITHUB_SHA}" -t uos:base .
           docker build --build-arg BASE_IMAGE=uos:base -t uos:sim unifi-os/sim/
           docker build --build-arg BASE_IMAGE=uos:base -t uos:seeded unifi-os/seeded/
