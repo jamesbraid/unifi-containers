@@ -41,7 +41,8 @@ jobs:
       - name: Build base, sim and seeded images
         run: |
           . ./unifi-os/pins.env
-          docker build -f unifi-os/Dockerfile --build-arg UOS_VERSION="$UOS_VERSION" -t unifi-os-server:ci .
+          docker build -f unifi-os/Dockerfile --build-arg UOS_VERSION="$UOS_VERSION" \
+            --build-arg UOS_APP_VERSION="$UOS_APP_VERSION" -t unifi-os-server:ci .
           docker build --build-arg BASE_IMAGE=unifi-os-server:ci -t unifi-os-server:ci-sim unifi-os/sim/
           docker build --build-arg BASE_IMAGE=unifi-os-server:ci -t unifi-os-server:ci-seeded unifi-os/seeded/
 

@@ -42,6 +42,29 @@ ENV APP_MODEL=UOSSERVER \
 RUN mkdir -p /usr/local/uos/init.d
 COPY src/unifi_runtime /usr/local/lib/unifi-containers/unifi_runtime
 
+# Bring the bundled Network application up to the pinned current release using
+# the product's own updater — the same OTA a real console performs (uid-agent
+# queries the firmware API for platform uos-deb11-<arch>; the installer ships
+# whatever was current at its build, which trails GA by weeks). Three
+# accommodations for running it in a build step instead of a booted system:
+# vendorcheck writes the identity stamps the tooling reads (and proves them),
+# the /data dirs the agent expects don't exist yet, and the vendor's dpkg
+# hooks pipe through systemd-cat, which has no journald to talk to here — so
+# they step aside for the install and come back after. The uuid vendorcheck
+# minted is removed: baked into the image it would become every container's
+# identity.
+ARG UOS_APP_VERSION
+LABEL org.unifi-containers.network-version="${UOS_APP_VERSION}"
+RUN set -e \
+ && python3 -m unifi_runtime.vendorcheck \
+ && mkdir -p /data/uos/tmp /data/unifi-core/config /data/unifi-core/logs /tmp/dpkg-hooks \
+ && for f in /etc/dpkg/dpkg.cfg.d/*; do grep -q systemd-cat "$f" && mv "$f" /tmp/dpkg-hooks/ || true; done \
+ && uos runnable install unifi --version "${UOS_APP_VERSION}" \
+ && for f in /tmp/dpkg-hooks/*; do [ -e "$f" ] && mv "$f" /etc/dpkg/dpkg.cfg.d/; done \
+ && rmdir /tmp/dpkg-hooks \
+ && test "$(dpkg-query -W -f '${Version}' unifi)" = "${UOS_APP_VERSION}" \
+ && rm -rf /data/uos/downloads /data/uos_uuid /data/unifi-core/logs/* /var/cache/apt/archives/*.deb
+
 # Shipped disabled. Each is enabled either by its variant's Dockerfile or, on
 # this image, by the entrypoint when the matching UOS_* env flag is set.
 # `systemd-analyze verify` turns a malformed unit or a moved ExecStart binary

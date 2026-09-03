@@ -60,6 +60,32 @@ def parse_release(payload: bytes, platform: str, channel: str = "release") -> Re
     )
 
 
+#: The bundled Network application, as UOS's own updater fetches it: product
+#: `unifi`, platform uos-deb11-<arch>. Both arches publish the same artifact;
+#: requiring them to agree catches a mid-publish read the same way the
+#: UOS-version pair below does.
+APP_PRODUCT_URL = f"{API}?filter=eq~~product~~unifi"
+APP_PLATFORMS = ("uos-deb11-amd64", "uos-deb11-arm64")
+
+
+def parse_app_version(payload: bytes, channel: str = "release") -> str:
+    """The release-channel version of the app's UOS deb, e.g. 10.6.101-35991-1."""
+    fw = json.loads(payload)["_embedded"]["firmware"]
+    versions = set()
+    for platform in APP_PLATFORMS:
+        matched = [f for f in fw if f.get("platform") == platform and f.get("channel") == channel]
+        if not matched:
+            seen = sorted({f"{f.get('channel')}/{f.get('platform')}" for f in fw})
+            raise RuntimeError(
+                f"the firmware API listed no {channel}/{platform} build of the "
+                f"bundled application (saw: {', '.join(seen) or 'nothing'})"
+            )
+        versions.add(matched[0]["version"].lstrip("v"))
+    if len(versions) != 1:
+        raise RuntimeError(f"uos-deb11 platform versions disagree: {sorted(versions)}")
+    return versions.pop()
+
+
 def check_versions_match(amd64: Release, arm64: Release) -> None:
     if amd64.version != arm64.version:
         raise RuntimeError(
@@ -91,23 +117,51 @@ def rewrite_readme(text: str, version: str, link: str) -> str:
     return text
 
 
+def app_version_moved(current: str, latest: str) -> bool:
+    """Whether the app pin should move to `latest`.
+
+    Full dpkg versions (10.6.101-35991-1) don't parse as PEP 440, so compare
+    the upstream X.Y.Z part properly and treat any change at an equal or newer
+    upstream as forward motion — the release channel only ever advances, and a
+    same-version repackage is exactly what a console would install.
+    """
+    if latest == current:
+        return False
+    if not current:
+        return True
+    return Version(latest.split("-")[0]) >= Version(current.split("-")[0])
+
+
 def bump(write=False, repo_root=Path(".")):
     """Select a release and optionally rewrite the pins.
 
-    Returns the version, or None when the pin is already current.
+    Returns the changed version (UOS release, or the bundled app's when only it
+    moved), or None when both pins are current.
     """
     pins_path = repo_root / PINS
     readme_path = repo_root / README
-    current = pinfile.env_values(pins_path.read_text())["UOS_VERSION"]
+    pins = pinfile.env_values(pins_path.read_text())
+    current = pins["UOS_VERSION"]
     amd64 = parse_release(fetch(api_url("linux-x64")), "linux-x64")
     arm64 = parse_release(fetch(api_url("linux-arm64")), "linux-arm64")
     check_versions_match(amd64, arm64)
-    if Version(amd64.version) <= Version(current):
+    app = parse_app_version(fetch(APP_PRODUCT_URL))
+
+    uos_moved = Version(amd64.version) > Version(current)
+    app_moved = app_version_moved(pins.get("UOS_APP_VERSION", ""), app)
+    if not uos_moved and not app_moved:
         return None
     if write:
-        pins_path.write_text(rewrite_pins(pins_path.read_text(), amd64.version, amd64, arm64))
-        readme_path.write_text(rewrite_readme(readme_path.read_text(), amd64.version, RELEASES_URL))
-    return amd64.version
+        text = pins_path.read_text()
+        if uos_moved:
+            text = rewrite_pins(text, amd64.version, amd64, arm64)
+        text = _sub_pin(text, "UOS_APP_VERSION", app)
+        pins_path.write_text(text)
+        if uos_moved:
+            readme_path.write_text(
+                rewrite_readme(readme_path.read_text(), amd64.version, RELEASES_URL)
+            )
+    return amd64.version if uos_moved else app
 
 
 SHA_KEYS = ("UOS_SHA256_AMD64", "UOS_SHA256_ARM64")
@@ -129,5 +183,9 @@ def verify(repo_root=Path(".")):
         if not url_exists(pins[key]):
             print(f"FAIL: {key} not reachable: {pins[key]}", file=sys.stderr)
             return 1
-    print(f"ok: {pins['UOS_VERSION']}")
+    app = pins.get("UOS_APP_VERSION", "")
+    if not re.fullmatch(r"\d+\.\d+\.\d+-\d+-\d+", app):
+        print(f"FAIL: UOS_APP_VERSION is not a full dpkg version: {app!r}", file=sys.stderr)
+        return 1
+    print(f"ok: {pins['UOS_VERSION']} app {app}")
     return 0
