@@ -1,0 +1,29 @@
+# Cut a release tag when a push makes one due: the pinned version has no
+# release tag yet, or (for unifi-os) the pins changed since the last one. A
+# content check, so it is idempotent and cuts nothing when nothing is due.
+# Forge only — the mirror's copy of this workflow skips on the server guard.
+name: tag
+on:
+  push:
+    branches: [main]
+
+jobs:
+  cut-release:
+    if: github.server_url != 'https://github.com'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # cut-release fetches the tags itself through pygit2 — a shell
+      # `git fetch` here once failed silently and left it deciding against an
+      # empty tag list.
+      #
+      # network only for the current release cycle: the joint-roadmap rule is
+      # one UOS release event at cycle end, cut deliberately, while the
+      # network lane keeps tagging as normal. Restore --all when it closes.
+      - name: Cut what the pins make due
+        env:
+          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          CI_REPO_CLONE_URL: ${{ github.server_url }}/${{ github.repository }}.git
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          "$HOME/.local/bin/uv" run -p 3.13 unifi-containers cut-release network --push
