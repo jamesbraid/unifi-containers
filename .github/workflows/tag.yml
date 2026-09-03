@@ -22,7 +22,7 @@ jobs:
       # network lane keeps tagging as normal. Restore --all when it closes.
       - name: Cut what the pins make due
         env:
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          FORGEJO_TOKEN: ${{ github.token }}
           CI_REPO_CLONE_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh

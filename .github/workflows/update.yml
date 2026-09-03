@@ -2,6 +2,10 @@
 # on the forge. Runs on Forgejo only — the schedule also fires on the GitHub
 # mirror, where every job skips on the server guard. The CI_* variables are
 # Woodpecker's names, kept because the python they feed is unchanged.
+#
+# The job's own ephemeral token is the credential: measured on this instance,
+# pushes made with it DO trigger workflows (Forgejo did not copy GitHub's
+# loop suppression), so bump PRs still get their required checks.
 name: update
 on:
   schedule:
@@ -16,7 +20,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Update the network pin
         env:
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          FORGEJO_TOKEN: ${{ github.token }}
           CI_FORGE_URL: ${{ github.server_url }}
           CI_REPO: ${{ github.repository }}
           CI_REPO_CLONE_URL: ${{ github.server_url }}/${{ github.repository }}.git
@@ -30,7 +34,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Update the UOS pins
         env:
-          FORGEJO_TOKEN: ${{ secrets.FORGEJO_TOKEN }}
+          FORGEJO_TOKEN: ${{ github.token }}
           CI_FORGE_URL: ${{ github.server_url }}
           CI_REPO: ${{ github.repository }}
           CI_REPO_CLONE_URL: ${{ github.server_url }}/${{ github.repository }}.git
