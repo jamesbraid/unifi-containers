@@ -26,6 +26,13 @@ Podman, Colima, Kubernetes.
 | `ghcr.io/jamesbraid/unifi-network` | 10.6.101 | [Release notes](https://community.ui.com/releases/UniFi-Network-Application-10-6-101/05283624-0980-4dd7-b8d6-9fa5c4e28da4) |
 | `ghcr.io/jamesbraid/unifi-os-server` | 5.1.40 | [Release notes](https://community.ui.com/releases) |
 
+The UOS images carry the **current** Network application, not the one the
+installer happened to bundle: the build runs the product's own updater
+(`uos runnable install unifi`) against the pinned release — the same OTA a
+real console performs. The bundled version is on every UOS image as the OCI
+label `org.unifi-containers.network-version`, and at runtime in
+`stat/sysinfo`.
+
 ## Tags
 
 | Variant | Image tags |
@@ -281,8 +288,9 @@ and the two test variants target one each:
   The `-seeded` variant seeds an Owner here headlessly. The **platform**
   version is readable pre-auth at `GET /api/system` → `firmwareVersion`
   (e.g. `5.1.21`) — no login needed. Don't conflate it with the Network App
-  version below: on `-sim`, `7443` reports the *Network App* version
-  (`10.4.57` for UOS 5.1.21), not the platform's.
+  version below: on `-sim`, `7443` reports the *Network App* version —
+  the current pinned release, not the installer's bundle — never the
+  platform's.
 - **Network Application API** (`127.0.0.1:8081` loopback; behind UOS SSO
   externally) — the classic UniFi controller API that go-unifi and
   terraform-provider-unifi target today. `UOS_NETWORK_DIRECT=true` (default

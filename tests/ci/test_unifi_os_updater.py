@@ -132,3 +132,58 @@ def test_parse_release_will_not_take_a_beta_build():
     ).encode()
     with pytest.raises(RuntimeError, match="saw: beta-public/linux-x64"):
         updater.parse_release(payload, "linux-x64")
+
+
+APP_PAYLOAD = json.dumps(
+    {
+        "_embedded": {
+            "firmware": [
+                record("v10.9.9", "https://x/beta", "f" * 64, "uos-deb11-amd64", "beta-public"),
+                record("v10.6.101-35991-1", "https://x/amd", "a" * 64, "uos-deb11-amd64"),
+                record("v10.6.101-35991-1", "https://x/arm", "a" * 64, "uos-deb11-arm64"),
+                record("v10.6.101-35991-1", "https://x/deb13", "b" * 64, "uos-deb13-amd64"),
+            ]
+        }
+    }
+).encode()
+
+
+def test_parse_app_version_reads_the_uos_deb11_pair():
+    assert updater.parse_app_version(APP_PAYLOAD) == "10.6.101-35991-1"
+
+
+def test_parse_app_version_requires_both_platforms():
+    one_sided = json.dumps(
+        {
+            "_embedded": {
+                "firmware": [record("v10.6.101-35991-1", "https://x", "a" * 64, "uos-deb11-amd64")]
+            }
+        }
+    ).encode()
+    with pytest.raises(RuntimeError, match="uos-deb11-arm64"):
+        updater.parse_app_version(one_sided)
+
+
+def test_parse_app_version_rejects_a_platform_disagreement():
+    torn = json.dumps(
+        {
+            "_embedded": {
+                "firmware": [
+                    record("v10.6.101-35991-1", "https://x/a", "a" * 64, "uos-deb11-amd64"),
+                    record("v10.6.102-36000-1", "https://x/b", "b" * 64, "uos-deb11-arm64"),
+                ]
+            }
+        }
+    ).encode()
+    with pytest.raises(RuntimeError, match="disagree"):
+        updater.parse_app_version(torn)
+
+
+def test_app_version_moved():
+    assert not updater.app_version_moved("10.6.101-35991-1", "10.6.101-35991-1")
+    assert updater.app_version_moved("10.5.67-35187-1", "10.6.101-35991-1")
+    assert updater.app_version_moved("", "10.6.101-35991-1")  # pin not yet present
+    # a repackage of the same upstream is forward motion, like a console sees it
+    assert updater.app_version_moved("10.6.101-35991-1", "10.6.101-35992-1")
+    # the release channel never goes backwards; a lower upstream is a torn read
+    assert not updater.app_version_moved("10.6.101-35991-1", "10.5.67-35187-1")

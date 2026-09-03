@@ -3,19 +3,32 @@
 Version from the pins, build number from the tags; idempotent.
 """
 
+from pathlib import Path
+
 from packaging.version import Version
 
 from unifi_containers import gitops, pins, release
 
 
-def decide(product, pinned, tags):
-    """(Release, reason) to cut, or (None, reason) when nothing is due."""
+def decide(product, pinned, tags, pins_changed_since=None):
+    """(Release, reason) to cut, or (None, reason) when nothing is due.
+
+    `pins_changed_since` answers "do the pins differ from that release tag";
+    when it says yes, the pinned version being released already is not the end
+    of the story — the tag was built from different pins (the bundled app
+    moved under an unchanged UOS version), so the next build is due without
+    anyone passing --rebuild.
+    """
     if not pinned:
         return None, f"{product} has no pinned version to release"
 
     existing = release.builds_of(tags, product, pinned)
     if existing:
         top = max(existing, key=lambda r: Version(r.version))
+        if pins_changed_since and pins_changed_since(top.git_tag):
+            return release.next_release(tags, product, pinned), (
+                f"the pins changed since {top.git_tag} was cut"
+            )
         return None, (
             f"{product} {pinned} is already released as {top.git_tag}; a "
             f"rebuild is deliberate — pass --rebuild to cut the next build"
@@ -53,7 +66,18 @@ def cut(products, push=False, rebuild=False):
 
     due = []
     for product in products:
-        rel, reason = chooser(product, pins.pinned_version(product), tags)
+        pin_file = None if rebuild else pins.pin_file(product)
+        if pin_file is None:
+            rel, reason = chooser(product, pins.pinned_version(product), tags)
+        else:
+            rel, reason = decide(
+                product,
+                pins.pinned_version(product),
+                tags,
+                pins_changed_since=lambda tag, f=pin_file: (
+                    gitops.file_at(repo, f"refs/tags/{tag}", f) != Path(f).read_text()
+                ),
+            )
         if rel is None:
             print(f"skip  {reason}")
             continue
