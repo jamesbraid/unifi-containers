@@ -24,6 +24,7 @@ jobs:
   # multi-arch on one amd64 machine and gate only what it could run, so the
   # arm64 image shipped having never started.
   build:
+    if: github.server_url == 'https://github.com'
     strategy:
       matrix:
         include:
@@ -104,7 +105,7 @@ jobs:
   # controller, so it happens here rather than in the build matrix.
   seed:
     needs: build
-    if: needs.build.outputs.publish == 'true'
+    if: github.server_url == 'https://github.com' && (needs.build.outputs.publish == 'true')
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -133,7 +134,7 @@ jobs:
 
   seeded:
     needs: [build, seed]
-    if: needs.build.outputs.publish == 'true'
+    if: github.server_url == 'https://github.com' && (needs.build.outputs.publish == 'true')
     strategy:
       matrix:
         include:
@@ -180,7 +181,7 @@ jobs:
 
   manifest:
     needs: [build, seeded]
-    if: needs.build.outputs.publish == 'true'
+    if: github.server_url == 'https://github.com' && (needs.build.outputs.publish == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -283,7 +284,7 @@ jobs:
   # exits clean.
   notify-failure:
     needs: [build, seed, seeded, manifest]
-    if: failure()
+    if: failure() && github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
     steps:
       - env:

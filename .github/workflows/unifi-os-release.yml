@@ -27,6 +27,7 @@ env:
 
 jobs:
   build:
+    if: github.server_url == 'https://github.com'
     strategy:
       matrix:
         include:
@@ -134,7 +135,7 @@ jobs:
 
   manifest:
     needs: build
-    if: needs.build.outputs.publish == 'true'
+    if: github.server_url == 'https://github.com' && (needs.build.outputs.publish == 'true')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -238,7 +239,7 @@ jobs:
   # exits clean.
   notify-failure:
     needs: [build, manifest]
-    if: failure()
+    if: failure() && github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
     steps:
       - env:
