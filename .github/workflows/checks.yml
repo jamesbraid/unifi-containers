@@ -1,5 +1,5 @@
-# The fast checks, ported verbatim from .woodpecker/checks.yml so tests and
-# lint run on the same CI as the integration suite. Runs on the general
+# The fast checks: tests, lint, types, pins. Runs on the forge's general
+# on the GitHub mirror the job skips on the server guard.
 name: checks
 on:
   pull_request:
@@ -8,6 +8,7 @@ on:
 
 jobs:
   checks:
+    if: github.server_url != 'https://github.com'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,7 +42,7 @@ jobs:
         run: |
           curl -fsSL https://github.com/rhysd/actionlint/releases/download/v1.7.7/actionlint_1.7.7_linux_amd64.tar.gz \
             | tar -xz -C /usr/local/bin actionlint
-          actionlint .github/workflows/*.yml .forgejo/workflows/*.yml
+          actionlint .github/workflows/*.yml
 
       - name: Types
         run: uv run -p 3.13 --extra dev mypy src/

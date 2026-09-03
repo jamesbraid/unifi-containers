@@ -4,7 +4,7 @@ A duplicate key is the failure mode this exists for. `yaml.safe_load` keeps the
 last one silently, so "it parses" proves nothing; GitHub rejects the file
 outright, and a duplicate `if:` here would have failed every network release
 without anything in the pipeline seeing it. actionlint catches this for
-.github/workflows, but nothing covered .woodpecker until this did.
+.github/workflows; the one workflow directory serves both servers.
 """
 
 from pathlib import Path
@@ -16,8 +16,6 @@ from conftest import REPO_ROOT
 CI_FILES = sorted(
     [
         *(REPO_ROOT / ".github" / "workflows").glob("*.yml"),
-        *(REPO_ROOT / ".forgejo" / "workflows").glob("*.yml"),
-        *(REPO_ROOT / ".woodpecker").glob("*.yml"),
     ]
 )
 
@@ -40,8 +38,9 @@ _NoDuplicates.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _m
 
 
 def test_there_are_ci_files_to_check():
-    # An empty glob would make every assertion below vacuously true.
-    assert len(CI_FILES) >= 8
+    # An empty glob would make every assertion below vacuously true. One
+    # directory serves both servers now; six workflows live there.
+    assert len(CI_FILES) >= 6
 
 
 @pytest.mark.parametrize("path", CI_FILES, ids=lambda p: str(Path(p).relative_to(REPO_ROOT)))
