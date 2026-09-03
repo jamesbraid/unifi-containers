@@ -16,4 +16,7 @@ steps:
       # itself through pygit2, over its bundled libgit2 and the image's CA
       # bundle. A shell `git fetch` here failed silently and left it deciding
       # against an empty tag list.
-      - uv run -p 3.13 unifi-containers cut-release --all --push
+      # network only for the current release cycle: the joint-roadmap rule is
+      # one UOS release event at cycle end, cut deliberately, while the network
+      # lane keeps tagging as normal. Restore --all when the cycle closes.
+      - uv run -p 3.13 unifi-containers cut-release network --push
