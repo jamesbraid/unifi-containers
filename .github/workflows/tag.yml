@@ -16,14 +16,10 @@ jobs:
       # cut-release fetches the tags itself through pygit2 — a shell
       # `git fetch` here once failed silently and left it deciding against an
       # empty tag list.
-      #
-      # network only for the current release cycle: the joint-roadmap rule is
-      # one UOS release event at cycle end, cut deliberately, while the
-      # network lane keeps tagging as normal. Restore --all when it closes.
       - name: Cut what the pins make due
         env:
           FORGEJO_TOKEN: ${{ github.token }}
           CI_REPO_CLONE_URL: ${{ github.server_url }}/${{ github.repository }}.git
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
-          "$HOME/.local/bin/uv" run -p 3.13 unifi-containers cut-release network --push
+          "$HOME/.local/bin/uv" run -p 3.13 unifi-containers cut-release --all --push
