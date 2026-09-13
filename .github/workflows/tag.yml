@@ -16,6 +16,9 @@ jobs:
       # cut-release fetches the tags itself through pygit2 — a shell
       # `git fetch` here once failed silently and left it deciding against an
       # empty tag list.
+      # The built-in token is enough here: this pushes a tag, and the tag
+      # workflows live on the mirror, which syncs independently of which
+      # credential pushed. Nothing waits on a pull_request run.
       - name: Cut what the pins make due
         env:
           FORGEJO_TOKEN: ${{ github.token }}
