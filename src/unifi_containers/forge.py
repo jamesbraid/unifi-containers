@@ -90,8 +90,15 @@ class Forge:
                 return pull.number
         return None
 
+    #: Forgejo answers a second auto-merge request for the same PR with 409
+    #: "already scheduled to auto merge". That is the state the caller wanted,
+    #: so it is success — and it has to be, because the lane re-runs nightly
+    #: against a PR that has not merged yet. Treating it as failure turned one
+    #: stalled bump into a red cron every night until someone looked.
+    ALREADY_SCHEDULED = 409
+
     def merge_when_green(self, number, method="rebase"):
-        """Queue an auto-merge once checks pass."""
+        """Queue an auto-merge once checks pass. Idempotent."""
         try:
             self._repos.repo_merge_pull_request(
                 self.owner,
@@ -102,4 +109,6 @@ class Forge:
                 delete_branch_after_merge=True,
             )
         except ApiError as exc:
+            if getattr(exc, "status_code", None) == self.ALREADY_SCHEDULED:
+                return
             raise ForgeError(f"scheduling auto-merge of #{number} -> {exc}") from exc

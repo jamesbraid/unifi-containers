@@ -149,3 +149,23 @@ def test_merge_when_green_queues_the_auto_merge_and_the_branch_deletion():
 def test_a_refused_merge_is_a_failure_the_lane_cannot_ignore():
     with pytest.raises(ForgeError, match="scheduling auto-merge of #9"):
         forge(Recorder()).merge_when_green(9)
+
+
+def test_auto_merge_is_idempotent():
+    # The lane re-runs nightly against a PR that has not merged yet, and the
+    # forge answers the second request with 409 "already scheduled". That is
+    # the state the caller asked for, so it must not fail the run.
+    rec = Recorder(
+        {
+            ("POST", "/pulls/7/merge"): httpx.Response(
+                409, json={"message": "pull request is already scheduled to auto merge"}
+            )
+        }
+    )
+    forge(rec).merge_when_green(7)  # must not raise
+
+
+def test_a_real_merge_failure_still_raises():
+    rec = Recorder({("POST", "/pulls/7/merge"): httpx.Response(500, json={"message": "boom"})})
+    with pytest.raises(ForgeError, match="#7"):
+        forge(rec).merge_when_green(7)
