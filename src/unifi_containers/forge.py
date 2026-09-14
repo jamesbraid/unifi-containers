@@ -81,13 +81,25 @@ class Forge:
 
     def find_pull(self, head):
         """The number of the open PR from `head`, or None."""
+        return (self._open_pull(head) or {}).get("number")
+
+    def pull_opened_at(self, head):
+        """When the open PR from `head` was opened, or None if there is none.
+
+        The lane asserts on this: a bump PR that has been sitting for a day is
+        a stalled lane, and a stalled lane reports green on every run outcome.
+        """
+        return (self._open_pull(head) or {}).get("created_at")
+
+    def _open_pull(self, head):
+        """The open PR from `head` as {number, created_at}, or None."""
         try:
             pulls = self._repos.repo_list_pull_requests(self.owner, self.name, state="open")
         except ApiError:
             return None
         for pull in pulls:
             if pull.head is not None and pull.head.ref == head:
-                return pull.number
+                return {"number": pull.number, "created_at": getattr(pull, "created_at", None)}
         return None
 
     #: Forgejo answers a second auto-merge request for the same PR with 409
