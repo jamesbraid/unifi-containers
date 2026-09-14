@@ -1,10 +1,10 @@
 """Cron driver: run one updater lane and open an auto-merging bump PR.
 
-Every endpoint comes from Woodpecker's CI_* variables; needs the FORGEJO_TOKEN
-secret.
+Every endpoint comes from the CI_* variables; the credential is UNIFI_BOT_TOKEN.
 """
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Callable, Optional
 
 from unifi_containers import forge, gitops
@@ -76,6 +76,46 @@ def open_pull(client, bump):
     return number
 
 
+#: How long a bump PR may stay open before the lane calls it stalled.
+#:
+#: The lane cannot tell "up to date" from "wedged" by looking at its own run
+#: outcomes — both are green — and twice in two days a broken credential froze
+#: the bump machinery while every check reported healthy. This is the assertion
+#: that distinguishes them: once a bump is due, it must actually land. A day is
+#: long enough that the normal path (open, check, automerge, all within
+#: minutes) never trips it, and short enough that a freeze surfaces on the next
+#: nightly run rather than whenever somebody happens to read the PR list.
+STALE_AFTER_HOURS = 24
+
+
+def hours_open(opened_at, now=None):
+    """How long a PR has been open, in hours. None when the forge did not say."""
+    if opened_at is None:
+        return None
+    if isinstance(opened_at, str):
+        opened_at = datetime.fromisoformat(opened_at.replace("Z", "+00:00"))
+    if opened_at.tzinfo is None:
+        opened_at = opened_at.replace(tzinfo=timezone.utc)
+    now = now or datetime.now(timezone.utc)
+    return (now - opened_at).total_seconds() / 3600
+
+
+def check_not_stalled(client, bump, limit=STALE_AFTER_HOURS):
+    """Fail the lane when this bump has been waiting too long to land.
+
+    Raises only on a PR that is genuinely old. An unknown open time is not
+    treated as stale: a missing field must not invent a failure.
+    """
+    age = hours_open(client.pull_opened_at(bump.branch))
+    if age is None or age < limit:
+        return
+    raise forge.ForgeError(
+        f"{bump.lane} has been waiting {age:.0f}h to move to {bump.version}: "
+        f"the bump PR from {bump.branch} is open but not landing, so the lane "
+        f"is stalled rather than up to date"
+    )
+
+
 def run_lane(lane):
     """Run one updater lane and open an auto-merging bump PR."""
     gitops.trust_workdir()
@@ -112,4 +152,8 @@ def run_lane(lane):
     number = open_pull(client, bump)
     client.merge_when_green(number)
     print(f"opened auto-merging PR #{number} ({bump.lane} {bump.version})")
+
+    # Last, so the auto-merge is scheduled either way: a stalled lane should
+    # still take every chance to unstick itself while it reports the stall.
+    check_not_stalled(client, bump)
     return 0
