@@ -100,13 +100,13 @@ def hours_open(opened_at, now=None):
     return (now - opened_at).total_seconds() / 3600
 
 
-def check_not_stalled(client, bump, limit=STALE_AFTER_HOURS):
+def check_not_stalled(client, bump, limit=STALE_AFTER_HOURS, now=None):
     """Fail the lane when this bump has been waiting too long to land.
 
     Raises only on a PR that is genuinely old. An unknown open time is not
     treated as stale: a missing field must not invent a failure.
     """
-    age = hours_open(client.pull_opened_at(bump.branch))
+    age = hours_open(client.pull_opened_at(bump.branch), now=now)
     if age is None or age < limit:
         return
     raise forge.ForgeError(

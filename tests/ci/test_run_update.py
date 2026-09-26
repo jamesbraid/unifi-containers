@@ -100,20 +100,20 @@ def test_hours_open_reads_every_shape_the_forge_returns(opened, expected):
 
 def test_a_fresh_bump_pr_is_not_a_stall():
     # The normal path opens, checks and merges within minutes.
-    update.check_not_stalled(_Client(NOW.isoformat()), BUMP)
+    update.check_not_stalled(_Client(NOW.isoformat()), BUMP, now=NOW)
 
 
 def test_a_bump_that_has_not_landed_in_a_day_fails_the_lane():
     with pytest.raises(update.forge.ForgeError, match="stalled rather than up to date"):
-        update.check_not_stalled(_Client("2026-09-11T12:00:00Z"), BUMP)
+        update.check_not_stalled(_Client("2026-09-11T12:00:00Z"), BUMP, now=NOW)
 
 
 def test_the_error_names_the_lane_and_the_version_it_is_stuck_below():
     with pytest.raises(update.forge.ForgeError) as excinfo:
-        update.check_not_stalled(_Client("2026-09-11T12:00:00Z"), BUMP)
+        update.check_not_stalled(_Client("2026-09-11T12:00:00Z"), BUMP, now=NOW)
     assert "uos" in str(excinfo.value) and "5.1.42" in str(excinfo.value)
 
 
 def test_an_unknown_open_time_is_not_a_stall():
     # A missing field must not invent a failure; only a measured age can.
-    update.check_not_stalled(_Client(None), BUMP)
+    update.check_not_stalled(_Client(None), BUMP, now=NOW)
