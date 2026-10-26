@@ -1,5 +1,5 @@
-# The fast checks: tests, lint, types, pins. Runs on the forge's general
-# on the GitHub mirror the job skips on the server guard.
+# The fast checks: tests, lint, types, pins. No docker needed; on the
+# GitHub mirror the job skips on the server guard.
 name: checks
 on:
   pull_request:

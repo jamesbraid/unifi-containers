@@ -1,8 +1,10 @@
 # Pre-merge integration: build the images and boot them, on Forgejo, so a
 # broken bump can no longer land on main and fail only after merge on the
-# GitHub mirror. Measured on this runner before writing this file: a
-# (cap list, host cgroupns, /sys/fs/cgroup rw) to healthy.
+# GitHub mirror. Measured on the forge's docker builders before writing this
+# file: a job's guest docker boots the full UOS systemd contract (cap list,
+# host cgroupns, /sys/fs/cgroup rw) to healthy.
 #
+# amd64 only — the forge's docker builders are amd64. The arm64 boots stay on the
 # GitHub release workflows' native arm64 runners.
 #
 # Forge only: on the GitHub mirror both jobs skip on the server guard — the
@@ -17,16 +19,17 @@ on:
 jobs:
   unifi-os:
     if: github.server_url != 'https://github.com'
-    # Default job image, no container override: the runner executes actions
-    # with the job image's own node, so actions/checkout only works where node
-    # exists (measured — checkout dies in a node-less image). uv and the
-    # docker client are a curl each.
+    # No container override: the runner executes actions with the job image's
+    # own node, so actions/checkout only works where node exists (measured —
+    # checkout dies in a node-less image). On the forge ubuntu-latest is the
+    # builders' act image, which has node. uv and the pinned docker client
+    # are a curl each.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # The guest's docker socket is mounted into every job; only the client
-      # and uv are missing from the default image.
+      # The guest's docker socket is mounted into every job; the job adds
+      # uv and a pinned docker client.
       - name: Install the docker client and uv
         run: |
           curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.5.1.tgz \
@@ -66,10 +69,11 @@ jobs:
 
   network:
     if: github.server_url != 'https://github.com'
-    # Default job image, no container override: the runner executes actions
-    # with the job image's own node, so actions/checkout only works where node
-    # exists (measured — checkout dies in a node-less image). uv and the
-    # docker client are a curl each.
+    # No container override: the runner executes actions with the job image's
+    # own node, so actions/checkout only works where node exists (measured —
+    # checkout dies in a node-less image). On the forge ubuntu-latest is the
+    # builders' act image, which has node. uv and the pinned docker client
+    # are a curl each.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
